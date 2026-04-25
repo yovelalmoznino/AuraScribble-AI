@@ -1,14 +1,16 @@
-# מפתחות שטוחים עבור הסקריפטים האוטומטיים (לפתרון ה-KeyError)
+# מפתחות שטוחים (עבור הסקריפטים האוטומטיים)
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/base_model.pth"
+train_manifest: "data/processed/train.jsonl"
+val_manifest: "data/processed/val.jsonl"
 
-# המבנה המקורי של המודל שלך (לשימוש הפונקציות הפנימיות)
+# המבנה המקורי (לשמירה על תאימות עם שאר חלקי הקוד)
 vocab:
   file: configs/vocab.txt
 training:
   seed: 1337
-  epochs: 5  # הורדנו ל-5 לטובת ה-Fine-tuning המהיר בגיטהאב
+  epochs: 5
   resume: true
   early_stopping: true
   early_stopping_patience: 40
@@ -17,7 +19,7 @@ training:
   learning_rate: 0.00002
   max_seq_len: 256
   max_tgt_len: 160
-  device: cpu # שינינו ל-cpu כי בשרת של גיטהאב אין GPU
+  device: cpu
 model:
   input_dim: 3
   encoder_hidden: 256
@@ -25,12 +27,12 @@ model:
   decoder_hidden: 256
   dropout: 0.15
 data:
-  train_manifest: data/processed/train.jsonl
-  val_manifest: data/processed/val.jsonl
+  train_manifest: "data/processed/train.jsonl"
+  val_manifest: "data/processed/val.jsonl"
   crohme_path: "data/raw/crohme"
   iam_online_path: "data/raw/iam"
   hebrew_manifest: "data/raw/hebrew_source.jsonl"
   use_raw_fallback: false
   synthetic_count: 20000
 export:
-  onnx_file: output/model.onnx # נתיב מקומי בתוך השרת
+  onnx_file: "output/model.onnx"
