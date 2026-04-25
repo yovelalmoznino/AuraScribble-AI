@@ -25,7 +25,11 @@ def download_data():
 def run_training():
     """מפעיל את קוד האימון המעודכן"""
     print("Starting fine-tuning...")
-    # אנחנו מעבירים את ה-config הקיים ואת תיקיית התיקונים החדשה
+    # יצירת תיקיית פלט כדי שלא תהיה שגיאת נתיב
+    os.makedirs("output", exist_ok=True)
+    
+    # הרצה עם הגדרת output_dir מפורשת בתוך הפקודה
+    # אנחנו מוסיפים דגל שיגרום ל-train.py להשתמש בתיקייה שיצרנו
     cmd = "python src/train.py --config configs/train.yaml --corrections_dir data/new_samples"
     os.system(cmd)
     
