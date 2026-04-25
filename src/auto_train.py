@@ -26,7 +26,7 @@ def run_training():
     """מפעיל את קוד האימון המקורי שלך"""
     # כאן אנחנו קוראים לסקריפט המקורי שלך
     print("Starting fine-tuning...")
-    os.system("python train.py --epochs 5 --data_dir data/new_samples")
+    os.system("python src/train.py --epochs 5 --data_dir data/new_samples")
 
 def upload_model():
     """מעלה את המודל המשופר חזרה לענן"""
