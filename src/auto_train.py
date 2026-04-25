@@ -7,7 +7,7 @@ from pathlib import Path
 # 1. הגדרות התחברות
 cred = credentials.Certificate("firebase-service-account.json")
 firebase_admin.initialize_app(cred, {
-    'storageBucket': 'aurascribble-app.appspot.com' # שם ה-Bucket שלך
+    'storageBucket': 'aurascribblr.firebasestorage.app' # שם ה-Bucket שלך
 })
 bucket = storage.bucket()
 
