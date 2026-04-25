@@ -1,4 +1,4 @@
-# מפתחות שטוחים (לפתרון כל ה-KeyErrors)
+# מפתחות שטוחים (השכבה ש-train.py קורא ישירות)
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/base_model.pth"
@@ -12,23 +12,21 @@ epochs: 5
 device: "cpu"
 seed: 1337
 
-# הגדרות מבנה המודל (השכבה שחסרה עכשיו)
+# הגדרות ארכיטקטורה (כאן הייתה השגיאה)
 input_dim: 3
 hidden_dim: 256
 encoder_hidden: 256
 decoder_hidden: 256
-encoder_layers: 3
+num_layers: 3        # השם שהקוד חיפש עכשיו
+encoder_layers: 3    # גיבוי
 dropout: 0.15
 
-# המבנה המקורי (לשמירה על תאימות מלאה)
+# המבנה המקורי (לתאימות)
 vocab:
   file: configs/vocab.txt
 training:
   seed: 1337
   epochs: 5
-  resume: true
-  early_stopping: true
-  early_stopping_patience: 40
   batch_size: 24
   learning_rate: 0.00002
   device: "cpu"
