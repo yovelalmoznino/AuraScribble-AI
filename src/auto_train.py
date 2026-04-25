@@ -23,11 +23,12 @@ def download_data():
     return count
 
 def run_training():
-    """מפעיל את קוד האימון המקורי שלך"""
-    # כאן אנחנו קוראים לסקריפט המקורי שלך
+    """מפעיל את קוד האימון המעודכן"""
     print("Starting fine-tuning...")
-    os.system("python src/train.py --epochs 5 --data_dir data/new_samples")
-
+    # אנחנו מעבירים את ה-config הקיים ואת תיקיית התיקונים החדשה
+    cmd = "python src/train.py --config configs/train.yaml --corrections_dir data/new_samples"
+    os.system(cmd)
+    
 def upload_model():
     """מעלה את המודל המשופר חזרה לענן"""
     model_path = "output/model.onnx" # הנתיב שבו train.py שומר את התוצאה
