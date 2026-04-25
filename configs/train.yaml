@@ -1,0 +1,31 @@
+﻿vocab:
+  file: configs/vocab.txt
+training:
+  seed: 1337
+  epochs: 130
+  resume: true
+  early_stopping: true
+  early_stopping_patience: 40
+  early_stopping_min_delta: 0.0001
+  batch_size: 24
+  learning_rate: 0.00002
+  max_seq_len: 256
+  max_tgt_len: 160
+  device: auto
+model:
+  input_dim: 3
+  encoder_hidden: 256
+  encoder_layers: 3
+  decoder_hidden: 256
+  dropout: 0.15
+data:
+  train_manifest: data/processed/train.jsonl
+  val_manifest: data/processed/val.jsonl
+  crohme_path: "data/raw/crohme"
+  iam_online_path: "data/raw/iam"
+  hebrew_manifest: "data/raw/hebrew_source.jsonl"
+  use_raw_fallback: false
+  synthetic_count: 20000
+export:
+  onnx_file: ../../app/src/main/assets/models/handwriting/handwriting_v1.onnx
+  quantized_onnx_file: ../../app/src/main/assets/models/handwriting/handwriting_v1_int8.onnx

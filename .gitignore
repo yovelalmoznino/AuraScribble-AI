@@ -1,0 +1,15 @@
+# סביבה וירטואלית
+venv/
+__pycache__/
+
+# דאטה (כל מה שבתוך תיקיית data)
+data/
+*.jsonl
+*.csv
+
+# מודלים ומשקולות
+output/
+*.pt
+*.pth
+*.onnx
+*.ckpt
