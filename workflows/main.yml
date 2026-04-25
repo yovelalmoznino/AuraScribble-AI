@@ -1,0 +1,28 @@
+name: AuraScribble Auto-Train Pipeline
+
+on:
+  workflow_dispatch: # מאפשר לך להריץ ידנית בלחיצת כפתור
+  schedule:
+    - cron: '0 0 * * 0' # ירוץ אוטומטית כל מוצ"ש בחצות
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install Dependencies
+        run: |
+          pip install torch onnx firebase-admin
+          # אם יש לך ספריות נוספות ב-requirements.txt, תריצי אותן כאן
+          
+      - name: Firebase Authentication
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > firebase-service-account.json
+        
+      - name: Run Auto-Train Script
+        run: python auto_train.py

@@ -387,3 +387,44 @@ def _parse_iam_form_xml(path: Path) -> list[HandwritingSample]:
         if points:
             out.append(HandwritingSample(points=points, text=text, mode="text"))
     return out
+
+
+# הוסיפי את זה לסוף הקובץ dataset.py
+
+def read_firebase_corrections(path: str | Path) -> list[HandwritingSample]:
+    """
+    מתאם לקריאת הנתונים המגיעים מהאפליקציה (AuraScribble).
+    קורא קבצי JSON בפורמט שבו כל קובץ הוא דגימה אחת.
+    """
+    samples: list[HandwritingSample] = []
+    dir_path = Path(path)
+    
+    if not dir_path.exists():
+        print(f"[read_firebase_corrections] Directory {path} does not exist.")
+        return []
+
+    for json_file in dir_path.glob("*.json"):
+        try:
+            with json_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            # קלוד שומר את הנקודות בשדה strokesJson כמחרוזת או points כמערך
+            raw_points = data.get("points")
+            if not raw_points and "strokesJson" in data:
+                raw_points = json.loads(data["strokesJson"])
+            
+            text = data.get("correctedText", "")
+            
+            if raw_points and text:
+                samples.append(
+                    HandwritingSample(
+                        points=raw_points,
+                        text=text,
+                        mode="correction"
+                    )
+                )
+        except Exception as e:
+            print(f"[read_firebase_corrections] Error reading {json_file}: {e}")
+            
+    print(f"Successfully loaded {len(samples)} correction samples.")
+    return samples
