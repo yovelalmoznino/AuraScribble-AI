@@ -16,7 +16,16 @@ class CharTokenizer:
     def from_file(cls, path: str | Path) -> "CharTokenizer":
         vocab = [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
         return cls(vocab)
+    def __len__(self):
+        # מחזיר את מספר התווים + 1 עבור ה-Padding/Unknown
+        return len(self.chars) + 1
 
+    @property
+    def vocab_size(self):
+        # למקרה שחלקים אחרים בקוד מחפשים את השם הזה
+        return len(self)
+
+    
     @staticmethod
     def _contains_hebrew(text: str) -> bool:
         return any("\u0590" <= ch <= "\u05FF" for ch in text)
