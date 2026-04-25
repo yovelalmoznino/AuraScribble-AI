@@ -3,7 +3,7 @@ output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/base_model.pth"
 train_manifest: "data/processed/train.jsonl"
-val_manifest: "data/processed/val.jsonl"
+val_manifest: "data/processed/train.jsonl"
 
 # המבנה המקורי (לשמירה על תאימות עם שאר חלקי הקוד)
 vocab:
