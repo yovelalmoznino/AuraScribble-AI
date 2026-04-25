@@ -29,3 +29,4 @@ data:
 export:
   onnx_file: ../../app/src/main/assets/models/handwriting/handwriting_v1.onnx
   quantized_onnx_file: ../../app/src/main/assets/models/handwriting/handwriting_v1_int8.onnx
+output_dir: "output"
