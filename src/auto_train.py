@@ -5,12 +5,10 @@ import json
 from pathlib import Path
 
 # 1. הגדרות התחברות
+# 1. הגדרות התחברות
 cred = credentials.Certificate("firebase-service-account.json")
-firebase_admin.initialize_app(cred, {
-    'storageBucket': 'aurascribblr.firebasestorage.app' # שם ה-Bucket שלך
-})
-bucket = storage.bucket()
-
+firebase_admin.initialize_app(cred) # בלי הגדרות נוספות כאן
+bucket = storage.bucket("aurascribblr.firebasestorage.app") # השם המדויק כאן
 def download_data():
     """מוריד את התיקונים החדשים מהאפליקציה"""
     Path("data/new_samples").mkdir(parents=True, exist_ok=True)
