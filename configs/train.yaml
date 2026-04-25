@@ -1,4 +1,4 @@
-# מפתחות שטוחים (עבור הסקריפטים האוטומטיים וה-Auto-Train)
+# מפתחות שטוחים (לפתרון כל ה-KeyErrors)
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/base_model.pth"
@@ -12,7 +12,15 @@ epochs: 5
 device: "cpu"
 seed: 1337
 
-# המבנה המקורי (לשמירה על תאימות עם שאר חלקי הקוד)
+# הגדרות מבנה המודל (השכבה שחסרה עכשיו)
+input_dim: 3
+hidden_dim: 256
+encoder_hidden: 256
+decoder_hidden: 256
+encoder_layers: 3
+dropout: 0.15
+
+# המבנה המקורי (לשמירה על תאימות מלאה)
 vocab:
   file: configs/vocab.txt
 training:
@@ -21,11 +29,8 @@ training:
   resume: true
   early_stopping: true
   early_stopping_patience: 40
-  early_stopping_min_delta: 0.0001
   batch_size: 24
   learning_rate: 0.00002
-  max_seq_len: 256
-  max_tgt_len: 160
   device: "cpu"
 model:
   input_dim: 3
@@ -36,7 +41,5 @@ model:
 data:
   train_manifest: "data/processed/train.jsonl"
   val_manifest: "data/processed/train.jsonl"
-  use_raw_fallback: false
-  synthetic_count: 20000
 export:
   onnx_file: "output/model.onnx"
