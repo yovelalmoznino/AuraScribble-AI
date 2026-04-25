@@ -1,8 +1,14 @@
-﻿vocab:
+# מפתחות שטוחים עבור הסקריפטים האוטומטיים (לפתרון ה-KeyError)
+output_dir: "output"
+vocab_path: "configs/vocab.txt"
+model_path: "models/base_model.pth"
+
+# המבנה המקורי של המודל שלך (לשימוש הפונקציות הפנימיות)
+vocab:
   file: configs/vocab.txt
 training:
   seed: 1337
-  epochs: 130
+  epochs: 5  # הורדנו ל-5 לטובת ה-Fine-tuning המהיר בגיטהאב
   resume: true
   early_stopping: true
   early_stopping_patience: 40
@@ -11,7 +17,7 @@ training:
   learning_rate: 0.00002
   max_seq_len: 256
   max_tgt_len: 160
-  device: auto
+  device: cpu # שינינו ל-cpu כי בשרת של גיטהאב אין GPU
 model:
   input_dim: 3
   encoder_hidden: 256
@@ -27,6 +33,4 @@ data:
   use_raw_fallback: false
   synthetic_count: 20000
 export:
-  onnx_file: ../../app/src/main/assets/models/handwriting/handwriting_v1.onnx
-  quantized_onnx_file: ../../app/src/main/assets/models/handwriting/handwriting_v1_int8.onnx
-output_dir: "output"
+  onnx_file: output/model.onnx # נתיב מקומי בתוך השרת
