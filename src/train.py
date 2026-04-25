@@ -128,7 +128,7 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
     model = HandwritingSeq2SeqModel(
         input_dim=5, # [dx, dy, x, y, pen_state]
         hidden_dim=config["hidden_dim"],
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=len(tokenizer),
         num_layers=config["num_layers"],
     ).to(device)
 
