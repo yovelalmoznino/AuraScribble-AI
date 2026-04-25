@@ -1,11 +1,13 @@
-# מפתחות שטוחים (עבור הסקריפטים האוטומטיים)
+# מפתחות שטוחים עבור הסקריפטים האוטומטיים
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/base_model.pth"
 train_manifest: "data/processed/train.jsonl"
 val_manifest: "data/processed/train.jsonl"
+max_seq_len: 256
+max_tgt_len: 160
 
-# המבנה המקורי (לשמירה על תאימות עם שאר חלקי הקוד)
+# המבנה המקורי (לשמירה על תאימות)
 vocab:
   file: configs/vocab.txt
 training:
@@ -28,10 +30,7 @@ model:
   dropout: 0.15
 data:
   train_manifest: "data/processed/train.jsonl"
-  val_manifest: "data/processed/val.jsonl"
-  crohme_path: "data/raw/crohme"
-  iam_online_path: "data/raw/iam"
-  hebrew_manifest: "data/raw/hebrew_source.jsonl"
+  val_manifest: "data/processed/train.jsonl"
   use_raw_fallback: false
   synthetic_count: 20000
 export:
