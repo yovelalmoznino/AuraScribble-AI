@@ -13,3 +13,5 @@ output/
 *.pth
 *.onnx
 *.ckpt
+
+!data/processed/*.jsonl
