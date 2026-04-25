@@ -35,11 +35,15 @@ def run_training():
     
 def upload_model():
     """מעלה את המודל המשופר חזרה לענן"""
-    model_path = "output/model.onnx" # הנתיב שבו train.py שומר את התוצאה
+    # הנתיב צריך להיות output/model.onnx (או השם שמוגדר ב-export)
+    model_path = "output/latest_model.onnx" 
     if os.path.exists(model_path):
         blob = bucket.blob('models/latest_handwriting.onnx')
         blob.upload_from_filename(model_path)
         print("New model uploaded to Firebase!")
+    else:
+        print(f"Model file not found at {model_path}")
+
 
 if __name__ == "__main__":
     new_data_count = download_data()
