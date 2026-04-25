@@ -1,4 +1,4 @@
-# מפתחות שטוחים עבור הסקריפטים האוטומטיים
+# מפתחות שטוחים (עבור הסקריפטים האוטומטיים וה-Auto-Train)
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/base_model.pth"
@@ -6,8 +6,13 @@ train_manifest: "data/processed/train.jsonl"
 val_manifest: "data/processed/train.jsonl"
 max_seq_len: 256
 max_tgt_len: 160
+batch_size: 24
+learning_rate: 0.00002
+epochs: 5
+device: "cpu"
+seed: 1337
 
-# המבנה המקורי (לשמירה על תאימות)
+# המבנה המקורי (לשמירה על תאימות עם שאר חלקי הקוד)
 vocab:
   file: configs/vocab.txt
 training:
@@ -21,7 +26,7 @@ training:
   learning_rate: 0.00002
   max_seq_len: 256
   max_tgt_len: 160
-  device: cpu
+  device: "cpu"
 model:
   input_dim: 3
   encoder_hidden: 256
