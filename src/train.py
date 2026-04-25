@@ -125,11 +125,14 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # במקום hidden_dim, נשתמש בשמות הספציפיים שהמודל מכיר
     model = HandwritingSeq2SeqModel(
-        input_dim=5, # [dx, dy, x, y, pen_state]
-        hidden_dim=config["hidden_dim"],
-        vocab_size=len(tokenizer),
+        input_dim=config["input_dim"],
+        encoder_hidden=config["encoder_hidden"], # שינוי מ-hidden_dim לזה
+        decoder_hidden=config["decoder_hidden"],
         num_layers=config["num_layers"],
+        vocab_size=len(tokenizer),
+        dropout=config["dropout"]
     ).to(device)
 
     criterion = nn.CrossEntropyLoss(ignore_index=0)
