@@ -10,16 +10,30 @@ cred = credentials.Certificate("firebase-service-account.json")
 firebase_admin.initialize_app(cred) # בלי הגדרות נוספות כאן
 bucket = storage.bucket("aurascribblr.firebasestorage.app") # השם המדויק כאן
 def download_data():
-    """מוריד את התיקונים החדשים מהאפליקציה"""
+    """מוריד את התיקונים החדשים מכל תיקיות המשנה בתוך new"""
+    current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
     Path("data/new_samples").mkdir(parents=True, exist_ok=True)
-    blobs = bucket.list_blobs(prefix='training_data/new/')
+    
+    # prefix='training_data/new/' יביא את כל מה שמתחיל בנתיב הזה
+    blobs = current_bucket.list_blobs(prefix='training_data/new/')
     count = 0
+    
     for blob in blobs:
-        filename = blob.name.split('/')[-1]
-        blob.download_to_filename(f"data/new_samples/{filename}")
-        # העברה לתיקיית processed כדי לא להתאמן פעמיים
-        bucket.rename_blob(blob, f"training_data/processed/{filename}")
+        # בדיקה שזה קובץ ולא תיקייה (blobs שמסתיימים ב-/ הם תיקיות)
+        if blob.name.endswith('/'):
+            continue
+            
+        # יצירת שם קובץ ייחודי כדי שלא יהיו התנגשויות (מחליפים סלאשים בקו תחתון)
+        safe_filename = blob.name.replace('/', '_')
+        blob.download_to_filename(f"data/new_samples/{safe_filename}")
+        
+        # העברה לתיקיית processed
+        new_path = blob.name.replace('training_data/new/', 'training_data/processed/')
+        current_bucket.rename_blob(blob, new_path)
+        
         count += 1
+        print(f"Downloaded: {blob.name}")
+        
     return count
 
 def run_training():
