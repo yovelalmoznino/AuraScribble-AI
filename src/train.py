@@ -51,7 +51,8 @@ class HandwritingDataset(Dataset):
         sample = self.samples[idx]
         points = sample.points
         if self.augment:
-            points = maybe_augment_relative_features(points)
+            # הפונקציה דורשת שנעביר לה את פרמטר ה-enabled
+            points = maybe_augment_relative_features(points, True)
 
         feats = points_to_relative_features(points)
         if len(feats) > self.max_seq_len:
