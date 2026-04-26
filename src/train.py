@@ -51,7 +51,6 @@ class HandwritingDataset(Dataset):
         sample = self.samples[idx]
         points = sample.points
         if self.augment:
-            # הפונקציה דורשת שנעביר לה את פרמטר ה-enabled
             points = maybe_augment_relative_features(points, True)
 
         feats = points_to_relative_features(points)
@@ -115,7 +114,6 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # --- התיקון המרכזי: התאמת השמות בדיוק לפונקציה ב-model.py ---
     model = HandwritingSeq2SeqModel(
         input_dim=config["input_dim"],
         hidden=config["hidden_dim"], 
@@ -124,13 +122,28 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         vocab_size=len(tokenizer)
     ).to(device)
 
+    # --- התיקון החדש: טעינת המשקולות מהקובץ ---
+    model_path = config.get("model_path", "models/checkpoint_best.pt")
+    if Path(model_path).exists():
+        print(f"Loading pre-trained weights from {model_path}...")
+        checkpoint = torch.load(model_path, map_location=device)
+        # תמיכה בפורמטים שונים של שמירת מודל
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["model_state_dict"])
+        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["state_dict"])
+        else:
+            model.load_state_dict(checkpoint)
+        print("Weights loaded successfully!")
+    else:
+        print(f"Warning: Model weights not found at {model_path}. Training from scratch!")
+    # ----------------------------------------
+
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id if hasattr(tokenizer, 'pad_id') else 0)
     
-    # --- מוקש 1 שנוטרל: התאמת שם ה-Learning Rate ל-YAML ---
     lr = config.get("learning_rate", config.get("lr", 0.0001))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # --- הוספת לולאת האימון (הייתה חסרה בקובץ שהעלית) ---
     print("Starting training loop...")
     epochs = config.get("epochs", 5)
     model.train()
@@ -153,7 +166,6 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         avg_loss = total_loss / max(1, len(train_loader))
         print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
 
-    # --- מוקש 2 שנוטרל: התאמת ייצוא ה-ONNX ל-3 הפרמטרים שהמודל דורש ---
     print("Exporting model to ONNX...")
     model.eval()
     dummy_src = torch.zeros(1, 10, config["input_dim"]).to(device)
