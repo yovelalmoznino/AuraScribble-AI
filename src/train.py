@@ -47,14 +47,14 @@ class HandwritingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-  def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
         sample = self.samples[idx]
         points = sample.points
 
-        # 1. קודם כל ממירים את הנקודות הגולמיות למאפיינים מתמטיים (Numpy Array)
+        # 1. קודם כל ממירים את הנקודות הגולמיות למאפיינים מתמטיים
         feats = points_to_relative_features(points)
         
-        # 2. רק אז מפעילים את האוגמנטציה על המאפיינים (כמו שהפונקציה מצפה לקבל!)
+        # 2. הוספת אוגמנטציה על המאפיינים (מתוקן)
         if self.augment:
             feats = maybe_augment_relative_features(feats, True)
 
@@ -95,7 +95,7 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # --- ה"קסם": שאיבת המילון המקורי מתוך הגיבוי ---
+    # --- שאיבת המילון המקורי מתוך הגיבוי ---
     model_path = config.get("model_path", "models/checkpoint_best.pt")
     rescued_vocab = None
     checkpoint = None
@@ -106,10 +106,8 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
             rescued_vocab = checkpoint["vocab"]
             print(f"Success! Rescued original vocabulary with {len(rescued_vocab)} characters.")
 
-    # טעינת הטוקנייזר
     tokenizer = CharTokenizer(config["vocab_path"])
     
-    # אם מצאנו את המילון האבוד, נתקן איתו את הקוד ונשמור אותו חזרה לקובץ
     if rescued_vocab:
         tokenizer.vocab = rescued_vocab
         tokenizer.stoi = {t: i for i, t in enumerate(rescued_vocab)}
@@ -152,7 +150,7 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         vocab_size=len(tokenizer)
     ).to(device)
 
-    # --- טעינת המשקולות מהמזוודה שכבר פתחנו ---
+    # --- טעינת המשקולות ---
     if checkpoint is not None:
         print(f"Loading pre-trained weights from {model_path}...")
         if isinstance(checkpoint, dict):
