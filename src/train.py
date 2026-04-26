@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import yaml
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
 
 # ייבוא פונקציות מהדאטה-סט
 from dataset import (
@@ -19,7 +17,7 @@ from dataset import (
     maybe_augment_relative_features,
     points_to_relative_features,
     read_manifest,
-    read_firebase_corrections, # פונקציה חדשה שנוסיף ל-dataset.py
+    read_firebase_corrections, 
 )
 from model import HandwritingSeq2SeqModel
 from tokenizer import CharTokenizer
@@ -88,29 +86,22 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         config = yaml.safe_load(f)
 
     set_seed(config.get("seed", 42))
-    out_dir = Path(config["output_dir"])
+    out_dir = Path(config.get("output_dir", "output"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     tokenizer = CharTokenizer(config["vocab_path"])
     
-    # טעינת דאטה בסיסי
     print(f"Loading base training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
     val_samples = read_manifest(config["val_manifest"])
 
-    # שילוב תיקונים מ-Firebase אם קיימים
     if corrections_dir:
         print(f"Integrating new corrections from {corrections_dir}...")
         new_samples = read_firebase_corrections(corrections_dir)
-        # אנחנו מוסיפים את התיקונים החדשים לרשימת האימון
-        # טיפ: אפשר להכפיל את new_samples כדי לתת להם משקל גבוה יותר באימון
         train_samples.extend(new_samples)
 
     train_ds = HandwritingDataset(
         train_samples, tokenizer, config["max_seq_len"], config["max_tgt_len"], augment=True
-    )
-    val_ds = HandwritingDataset(
-        val_samples, tokenizer, config["max_seq_len"], config["max_tgt_len"], augment=False
     )
 
     train_loader = DataLoader(
@@ -120,38 +111,67 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         collate_fn=collate_fn,
         num_workers=config.get("num_workers", 0),
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=config["batch_size"], shuffle=False, collate_fn=collate_fn
-    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # במקום hidden_dim, נשתמש בשמות הספציפיים שהמודל מכיר
+    
+    # --- התיקון המרכזי: התאמת השמות בדיוק לפונקציה ב-model.py ---
     model = HandwritingSeq2SeqModel(
         input_dim=config["input_dim"],
-        encoder_hidden=config["encoder_hidden"], # שינוי מ-hidden_dim לזה
-        decoder_hidden=config["decoder_hidden"],
-        num_layers=config["num_layers"],
-        vocab_size=len(tokenizer),
-        dropout=config["dropout"]
+        hidden=config["hidden_dim"], 
+        layers=config["num_layers"],
+        dropout=config["dropout"],
+        vocab_size=len(tokenizer)
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id if hasattr(tokenizer, 'pad_id') else 0)
+    
+    # --- מוקש 1 שנוטרל: התאמת שם ה-Learning Rate ל-YAML ---
+    lr = config.get("learning_rate", config.get("lr", 0.0001))
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # לוגיקת אימון (קוצר כאן לצורך הפרומפט, נשארת כפי שהייתה במקור שלך)
-    # ... (כאן מגיע ה-Loop של ה-Epochs שמופיע בקובץ המקורי שלך)
+    # --- הוספת לולאת האימון (הייתה חסרה בקובץ שהעלית) ---
+    print("Starting training loop...")
+    epochs = config.get("epochs", 5)
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        for batch_idx, batch in enumerate(train_loader):
+            inputs = batch["inputs"].to(device)
+            input_lens = batch["input_lens"].to(device)
+            targets = batch["targets"].to(device)
+            
+            optimizer.zero_grad()
+            logits = model(inputs, input_lens, targets)
+            
+            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+        avg_loss = total_loss / max(1, len(train_loader))
+        print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
 
-    # שמירת המודל הסופי בפורמט ONNX עבור האפליקציה
+    # --- מוקש 2 שנוטרל: התאמת ייצוא ה-ONNX ל-3 הפרמטרים שהמודל דורש ---
     print("Exporting model to ONNX...")
-    dummy_input = torch.zeros(1, 10, 5).to(device)
+    model.eval()
+    dummy_src = torch.zeros(1, 10, config["input_dim"]).to(device)
+    dummy_lens = torch.tensor([10], dtype=torch.long).to(device)
+    dummy_tgt = torch.zeros(1, 5, dtype=torch.long).to(device)
+    
     torch.onnx.export(
         model,
-        dummy_input,
+        (dummy_src, dummy_lens, dummy_tgt),
         out_dir / "latest_model.onnx",
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes={"input": {0: "batch", 1: "seq"}, "output": {0: "batch", 1: "seq"}},
+        input_names=["src", "src_lens", "tgt_inp"],
+        output_names=["logits"],
+        dynamic_axes={
+            "src": {0: "batch", 1: "seq"}, 
+            "tgt_inp": {0: "batch", 1: "seq_tgt"},
+            "logits": {0: "batch", 1: "seq_tgt"}
+        },
     )
+    print("Training and export complete!")
 
 
 if __name__ == "__main__":
