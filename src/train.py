@@ -47,13 +47,17 @@ class HandwritingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
+  def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
         sample = self.samples[idx]
         points = sample.points
-        if self.augment:
-            points = maybe_augment_relative_features(points, True)
 
+        # 1. קודם כל ממירים את הנקודות הגולמיות למאפיינים מתמטיים (Numpy Array)
         feats = points_to_relative_features(points)
+        
+        # 2. רק אז מפעילים את האוגמנטציה על המאפיינים (כמו שהפונקציה מצפה לקבל!)
+        if self.augment:
+            feats = maybe_augment_relative_features(feats, True)
+
         if len(feats) > self.max_seq_len:
             feats = feats[: self.max_seq_len]
         
