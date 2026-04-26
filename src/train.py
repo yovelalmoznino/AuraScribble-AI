@@ -89,7 +89,35 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
     out_dir = Path(config.get("output_dir", "output"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # --- ה"קסם": שאיבת המילון המקורי מתוך הגיבוי ---
+    model_path = config.get("model_path", "models/checkpoint_best.pt")
+    rescued_vocab = None
+    checkpoint = None
+    if Path(model_path).exists():
+        print("Checking checkpoint for original vocabulary...")
+        checkpoint = torch.load(model_path, map_location=device)
+        if isinstance(checkpoint, dict) and "vocab" in checkpoint:
+            rescued_vocab = checkpoint["vocab"]
+            print(f"Success! Rescued original vocabulary with {len(rescued_vocab)} characters.")
+
+    # טעינת הטוקנייזר
     tokenizer = CharTokenizer(config["vocab_path"])
+    
+    # אם מצאנו את המילון האבוד, נתקן איתו את הקוד ונשמור אותו חזרה לקובץ
+    if rescued_vocab:
+        tokenizer.vocab = rescued_vocab
+        tokenizer.stoi = {t: i for i, t in enumerate(rescued_vocab)}
+        tokenizer.blank_id = tokenizer.stoi.get("<blank>", 0)
+        tokenizer.pad_id = tokenizer.stoi.get("<pad>", 1)
+        tokenizer.bos_id = tokenizer.stoi.get("<bos>", tokenizer.pad_id)
+        tokenizer.eos_id = tokenizer.stoi.get("<eos>", tokenizer.pad_id)
+        
+        with open(config["vocab_path"], "w", encoding="utf-8") as vf:
+            for v in rescued_vocab:
+                vf.write(f"{v}\n")
+    # ---------------------------------------------------
     
     print(f"Loading base training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
@@ -111,8 +139,6 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         collate_fn=collate_fn,
         num_workers=config.get("num_workers", 0),
     )
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model = HandwritingSeq2SeqModel(
         input_dim=config["input_dim"],
@@ -122,15 +148,11 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         vocab_size=len(tokenizer)
     ).to(device)
 
-# --- התיקון החדש: טעינת המשקולות מהקובץ ---
-    model_path = config.get("model_path", "models/checkpoint_best.pt")
-    if Path(model_path).exists():
+    # --- טעינת המשקולות מהמזוודה שכבר פתחנו ---
+    if checkpoint is not None:
         print(f"Loading pre-trained weights from {model_path}...")
-        checkpoint = torch.load(model_path, map_location=device)
-        
-        # חיפוש המשקולות בתוך "המזוודה" לפי השמות האפשריים
         if isinstance(checkpoint, dict):
-            if "model_state" in checkpoint:          # <--- זה השם שהקובץ שלך משתמש בו!
+            if "model_state" in checkpoint:
                 model.load_state_dict(checkpoint["model_state"])
             elif "model_state_dict" in checkpoint:
                 model.load_state_dict(checkpoint["model_state_dict"])
@@ -140,11 +162,9 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
                 model.load_state_dict(checkpoint)
         else:
             model.load_state_dict(checkpoint)
-            
         print("Weights loaded successfully!")
     else:
         print(f"Warning: Model weights not found at {model_path}. Training from scratch!")
-    # ----------------------------------------
     # ----------------------------------------
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id if hasattr(tokenizer, 'pad_id') else 0)
