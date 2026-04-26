@@ -1,25 +1,35 @@
-# מפתחות שטוחים (עבור הסקריפטים האוטומטיים)
+# מפתחות שטוחים (השכבה ש-train.py קורא ישירות)
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
-model_path: "models/base_model.pth"
+model_path: "models/checkpoint_best.pt"
 train_manifest: "data/processed/train.jsonl"
-val_manifest: "data/processed/val.jsonl"
+val_manifest: "data/processed/train.jsonl"
+max_seq_len: 256
+max_tgt_len: 160
+batch_size: 24
+learning_rate: 0.00002
+epochs: 5
+device: "cpu"
+seed: 1337
 
-# המבנה המקורי (לשמירה על תאימות עם שאר חלקי הקוד)
+# הגדרות ארכיטקטורה (כאן הייתה השגיאה)
+input_dim: 3
+hidden_dim: 256
+encoder_hidden: 256
+decoder_hidden: 256
+num_layers: 3        # השם שהקוד חיפש עכשיו
+encoder_layers: 3    # גיבוי
+dropout: 0.15
+
+# המבנה המקורי (לתאימות)
 vocab:
   file: configs/vocab.txt
 training:
   seed: 1337
   epochs: 5
-  resume: true
-  early_stopping: true
-  early_stopping_patience: 40
-  early_stopping_min_delta: 0.0001
   batch_size: 24
   learning_rate: 0.00002
-  max_seq_len: 256
-  max_tgt_len: 160
-  device: cpu
+  device: "cpu"
 model:
   input_dim: 3
   encoder_hidden: 256
@@ -28,11 +38,6 @@ model:
   dropout: 0.15
 data:
   train_manifest: "data/processed/train.jsonl"
-  val_manifest: "data/processed/val.jsonl"
-  crohme_path: "data/raw/crohme"
-  iam_online_path: "data/raw/iam"
-  hebrew_manifest: "data/raw/hebrew_source.jsonl"
-  use_raw_fallback: false
-  synthetic_count: 20000
+  val_manifest: "data/processed/train.jsonl"
 export:
   onnx_file: "output/model.onnx"

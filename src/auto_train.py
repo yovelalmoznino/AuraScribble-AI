@@ -10,16 +10,30 @@ cred = credentials.Certificate("firebase-service-account.json")
 firebase_admin.initialize_app(cred) # בלי הגדרות נוספות כאן
 bucket = storage.bucket("aurascribblr.firebasestorage.app") # השם המדויק כאן
 def download_data():
-    """מוריד את התיקונים החדשים מהאפליקציה"""
+    """מוריד את התיקונים החדשים מכל תיקיות המשנה בתוך new"""
+    current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
     Path("data/new_samples").mkdir(parents=True, exist_ok=True)
-    blobs = bucket.list_blobs(prefix='training_data/new/')
+    
+    # prefix='training_data/new/' יביא את כל מה שמתחיל בנתיב הזה
+    blobs = current_bucket.list_blobs(prefix='training_data/new/')
     count = 0
+    
     for blob in blobs:
-        filename = blob.name.split('/')[-1]
-        blob.download_to_filename(f"data/new_samples/{filename}")
-        # העברה לתיקיית processed כדי לא להתאמן פעמיים
-        bucket.rename_blob(blob, f"training_data/processed/{filename}")
+        # בדיקה שזה קובץ ולא תיקייה (blobs שמסתיימים ב-/ הם תיקיות)
+        if blob.name.endswith('/'):
+            continue
+            
+        # יצירת שם קובץ ייחודי כדי שלא יהיו התנגשויות (מחליפים סלאשים בקו תחתון)
+        safe_filename = blob.name.replace('/', '_')
+        blob.download_to_filename(f"data/new_samples/{safe_filename}")
+        
+        # העברה לתיקיית processed
+        new_path = blob.name.replace('training_data/new/', 'training_data/processed/')
+        current_bucket.rename_blob(blob, new_path)
+        
         count += 1
+        print(f"Downloaded: {blob.name}")
+        
     return count
 
 def run_training():
@@ -44,11 +58,45 @@ def upload_model():
     else:
         print(f"Model file not found at {model_path}")
 
+def cleanup_firebase_samples():
+    """מוחק את התיקונים שכבר השתמשנו בהם כדי לאפס את המונה ל-150 הבאים"""
+    print("AuraScribble: Cleaning up processed files from Firebase...")
+    bucket = storage.bucket("aurascribblr.firebasestorage.app")
+    blobs = list(bucket.list_blobs(prefix='training_data/new/'))
+    
+    deleted_count = 0
+    for blob in blobs:
+        if blob.name.endswith('.json'):
+            blob.delete()
+            deleted_count += 1
+            
+    print(f"Cleanup complete. Deleted {deleted_count} files. Counter is reset to 0.")
+
+
+
+def download_base_model():
+    """מוריד את המודל המקורי מ-Firebase כדי שיהיה על מה להתאמן"""
+    current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
+    Path("models").mkdir(exist_ok=True)
+    
+    # השם המדויק שיש לך ב-Storage
+    blob = current_bucket.blob('models/checkpoint_best.pt')
+    
+    if blob.exists():
+        print("Downloading base model from Firebase...")
+        blob.download_to_filename("models/checkpoint_best.pt")
+        print("Base model downloaded successfully.")
+    else:
+        print("Warning: No base model found in Firebase. Training from scratch might fail.")
+
+
 
 if __name__ == "__main__":
     new_data_count = download_data()
+    download_base_model()
     if new_data_count > 0:
         run_training()
         upload_model()
+        cleanup_firebase_samples()
     else:
         print("No new corrections found. System is up to date.")

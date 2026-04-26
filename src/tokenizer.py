@@ -1,7 +1,6 @@
 from __future__ import annotations
-
+import json
 from pathlib import Path
-
 
 class CharTokenizer:
     def __init__(self, vocab: list[str]) -> None:
@@ -17,6 +16,16 @@ class CharTokenizer:
         vocab = [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
         return cls(vocab)
 
+    def __len__(self):
+        # מחזיר את אורך רשימת ה-vocab
+        # בדרך כלל אין צורך ב-+1 אם ה-padding כבר כלול בתוך ה-vocab (והוא כלול אצלך)
+        return len(self.vocab)
+
+    @property
+    def vocab_size(self):
+        # מאפשר לקוד ב-train.py לקרוא למאפיין הזה ישירות
+        return len(self)
+
     @staticmethod
     def _contains_hebrew(text: str) -> bool:
         return any("\u0590" <= ch <= "\u05FF" for ch in text)
@@ -24,7 +33,6 @@ class CharTokenizer:
     def preprocess_text_for_tokens(self, text: str, rtl_aware: bool = True) -> str:
         """
         Returns the string in token chronology (drawing order).
-
         For Hebrew runs, we reverse the textual order so the first drawn character maps
         to the first token when training against online pen trajectories.
         """

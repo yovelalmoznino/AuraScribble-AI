@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import yaml
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
 
 # ייבוא פונקציות מהדאטה-סט
 from dataset import (
@@ -19,7 +17,7 @@ from dataset import (
     maybe_augment_relative_features,
     points_to_relative_features,
     read_manifest,
-    read_firebase_corrections, # פונקציה חדשה שנוסיף ל-dataset.py
+    read_firebase_corrections, 
 )
 from model import HandwritingSeq2SeqModel
 from tokenizer import CharTokenizer
@@ -52,10 +50,14 @@ class HandwritingDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
         sample = self.samples[idx]
         points = sample.points
-        if self.augment:
-            points = maybe_augment_relative_features(points)
 
+        # 1. קודם כל ממירים את הנקודות הגולמיות למאפיינים מתמטיים
         feats = points_to_relative_features(points)
+        
+        # 2. הוספת אוגמנטציה על המאפיינים (מתוקן)
+        if self.augment:
+            feats = maybe_augment_relative_features(feats, True)
+
         if len(feats) > self.max_seq_len:
             feats = feats[: self.max_seq_len]
         
@@ -88,29 +90,48 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         config = yaml.safe_load(f)
 
     set_seed(config.get("seed", 42))
-    out_dir = Path(config["output_dir"])
+    out_dir = Path(config.get("output_dir", "output"))
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # --- שאיבת המילון המקורי מתוך הגיבוי ---
+    model_path = config.get("model_path", "models/checkpoint_best.pt")
+    rescued_vocab = None
+    checkpoint = None
+    if Path(model_path).exists():
+        print("Checking checkpoint for original vocabulary...")
+        checkpoint = torch.load(model_path, map_location=device)
+        if isinstance(checkpoint, dict) and "vocab" in checkpoint:
+            rescued_vocab = checkpoint["vocab"]
+            print(f"Success! Rescued original vocabulary with {len(rescued_vocab)} characters.")
 
     tokenizer = CharTokenizer(config["vocab_path"])
     
-    # טעינת דאטה בסיסי
+    if rescued_vocab:
+        tokenizer.vocab = rescued_vocab
+        tokenizer.stoi = {t: i for i, t in enumerate(rescued_vocab)}
+        tokenizer.blank_id = tokenizer.stoi.get("<blank>", 0)
+        tokenizer.pad_id = tokenizer.stoi.get("<pad>", 1)
+        tokenizer.bos_id = tokenizer.stoi.get("<bos>", tokenizer.pad_id)
+        tokenizer.eos_id = tokenizer.stoi.get("<eos>", tokenizer.pad_id)
+        
+        with open(config["vocab_path"], "w", encoding="utf-8") as vf:
+            for v in rescued_vocab:
+                vf.write(f"{v}\n")
+    # ---------------------------------------------------
+    
     print(f"Loading base training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
     val_samples = read_manifest(config["val_manifest"])
 
-    # שילוב תיקונים מ-Firebase אם קיימים
     if corrections_dir:
         print(f"Integrating new corrections from {corrections_dir}...")
         new_samples = read_firebase_corrections(corrections_dir)
-        # אנחנו מוסיפים את התיקונים החדשים לרשימת האימון
-        # טיפ: אפשר להכפיל את new_samples כדי לתת להם משקל גבוה יותר באימון
         train_samples.extend(new_samples)
 
     train_ds = HandwritingDataset(
         train_samples, tokenizer, config["max_seq_len"], config["max_tgt_len"], augment=True
-    )
-    val_ds = HandwritingDataset(
-        val_samples, tokenizer, config["max_seq_len"], config["max_tgt_len"], augment=False
     )
 
     train_loader = DataLoader(
@@ -120,35 +141,80 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         collate_fn=collate_fn,
         num_workers=config.get("num_workers", 0),
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=config["batch_size"], shuffle=False, collate_fn=collate_fn
-    )
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     model = HandwritingSeq2SeqModel(
-        input_dim=5, # [dx, dy, x, y, pen_state]
-        hidden_dim=config["hidden_dim"],
-        vocab_size=tokenizer.vocab_size,
-        num_layers=config["num_layers"],
+        input_dim=config["input_dim"],
+        hidden=config["hidden_dim"], 
+        layers=config["num_layers"],
+        dropout=config["dropout"],
+        vocab_size=len(tokenizer)
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
+    # --- טעינת המשקולות ---
+    if checkpoint is not None:
+        print(f"Loading pre-trained weights from {model_path}...")
+        if isinstance(checkpoint, dict):
+            if "model_state" in checkpoint:
+                model.load_state_dict(checkpoint["model_state"])
+            elif "model_state_dict" in checkpoint:
+                model.load_state_dict(checkpoint["model_state_dict"])
+            elif "state_dict" in checkpoint:
+                model.load_state_dict(checkpoint["state_dict"])
+            else:
+                model.load_state_dict(checkpoint)
+        else:
+            model.load_state_dict(checkpoint)
+        print("Weights loaded successfully!")
+    else:
+        print(f"Warning: Model weights not found at {model_path}. Training from scratch!")
+    # ----------------------------------------
 
-    # לוגיקת אימון (קוצר כאן לצורך הפרומפט, נשארת כפי שהייתה במקור שלך)
-    # ... (כאן מגיע ה-Loop של ה-Epochs שמופיע בקובץ המקורי שלך)
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id if hasattr(tokenizer, 'pad_id') else 0)
+    
+    lr = config.get("learning_rate", config.get("lr", 0.0001))
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # שמירת המודל הסופי בפורמט ONNX עבור האפליקציה
+    print("Starting training loop...")
+    epochs = config.get("epochs", 5)
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        for batch_idx, batch in enumerate(train_loader):
+            inputs = batch["inputs"].to(device)
+            input_lens = batch["input_lens"].to(device)
+            targets = batch["targets"].to(device)
+            
+            optimizer.zero_grad()
+            logits = model(inputs, input_lens, targets)
+            
+            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+        avg_loss = total_loss / max(1, len(train_loader))
+        print(f"Epoch {epoch+1}/{epochs} - Loss: {avg_loss:.4f}")
+
     print("Exporting model to ONNX...")
-    dummy_input = torch.zeros(1, 10, 5).to(device)
+    model.eval()
+    dummy_src = torch.zeros(1, 10, config["input_dim"]).to(device)
+    dummy_lens = torch.tensor([10], dtype=torch.long).to(device)
+    dummy_tgt = torch.zeros(1, 5, dtype=torch.long).to(device)
+    
     torch.onnx.export(
         model,
-        dummy_input,
+        (dummy_src, dummy_lens, dummy_tgt),
         out_dir / "latest_model.onnx",
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes={"input": {0: "batch", 1: "seq"}, "output": {0: "batch", 1: "seq"}},
+        input_names=["src", "src_lens", "tgt_inp"],
+        output_names=["logits"],
+        dynamic_axes={
+            "src": {0: "batch", 1: "seq"}, 
+            "tgt_inp": {0: "batch", 1: "seq_tgt"},
+            "logits": {0: "batch", 1: "seq_tgt"}
+        },
     )
+    print("Training and export complete!")
 
 
 if __name__ == "__main__":
