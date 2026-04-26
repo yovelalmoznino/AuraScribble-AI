@@ -5,12 +5,10 @@ import json
 from pathlib import Path
 
 # 1. הגדרות התחברות
+# 1. הגדרות התחברות
 cred = credentials.Certificate("firebase-service-account.json")
-firebase_admin.initialize_app(cred, {
-    'storageBucket': 'aurascribble-app.appspot.com' # שם ה-Bucket שלך
-})
-bucket = storage.bucket()
-
+firebase_admin.initialize_app(cred) # בלי הגדרות נוספות כאן
+bucket = storage.bucket("aurascribblr.firebasestorage.app") # השם המדויק כאן
 def download_data():
     """מוריד את התיקונים החדשים מהאפליקציה"""
     Path("data/new_samples").mkdir(parents=True, exist_ok=True)
@@ -25,18 +23,27 @@ def download_data():
     return count
 
 def run_training():
-    """מפעיל את קוד האימון המקורי שלך"""
-    # כאן אנחנו קוראים לסקריפט המקורי שלך
+    """מפעיל את קוד האימון המעודכן"""
     print("Starting fine-tuning...")
-    os.system("python train.py --epochs 5 --data_dir data/new_samples")
-
+    # יצירת תיקיית פלט כדי שלא תהיה שגיאת נתיב
+    os.makedirs("output", exist_ok=True)
+    
+    # הרצה עם הגדרת output_dir מפורשת בתוך הפקודה
+    # אנחנו מוסיפים דגל שיגרום ל-train.py להשתמש בתיקייה שיצרנו
+    cmd = "python src/train.py --config configs/train.yaml --corrections_dir data/new_samples"
+    os.system(cmd)
+    
 def upload_model():
     """מעלה את המודל המשופר חזרה לענן"""
-    model_path = "output/model.onnx" # הנתיב שבו train.py שומר את התוצאה
+    # הנתיב צריך להיות output/model.onnx (או השם שמוגדר ב-export)
+    model_path = "output/latest_model.onnx" 
     if os.path.exists(model_path):
         blob = bucket.blob('models/latest_handwriting.onnx')
         blob.upload_from_filename(model_path)
         print("New model uploaded to Firebase!")
+    else:
+        print(f"Model file not found at {model_path}")
+
 
 if __name__ == "__main__":
     new_data_count = download_data()
