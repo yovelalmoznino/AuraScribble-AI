@@ -122,21 +122,29 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         vocab_size=len(tokenizer)
     ).to(device)
 
-    # --- התיקון החדש: טעינת המשקולות מהקובץ ---
+# --- התיקון החדש: טעינת המשקולות מהקובץ ---
     model_path = config.get("model_path", "models/checkpoint_best.pt")
     if Path(model_path).exists():
         print(f"Loading pre-trained weights from {model_path}...")
         checkpoint = torch.load(model_path, map_location=device)
-        # תמיכה בפורמטים שונים של שמירת מודל
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            model.load_state_dict(checkpoint["model_state_dict"])
-        elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            model.load_state_dict(checkpoint["state_dict"])
+        
+        # חיפוש המשקולות בתוך "המזוודה" לפי השמות האפשריים
+        if isinstance(checkpoint, dict):
+            if "model_state" in checkpoint:          # <--- זה השם שהקובץ שלך משתמש בו!
+                model.load_state_dict(checkpoint["model_state"])
+            elif "model_state_dict" in checkpoint:
+                model.load_state_dict(checkpoint["model_state_dict"])
+            elif "state_dict" in checkpoint:
+                model.load_state_dict(checkpoint["state_dict"])
+            else:
+                model.load_state_dict(checkpoint)
         else:
             model.load_state_dict(checkpoint)
+            
         print("Weights loaded successfully!")
     else:
         print(f"Warning: Model weights not found at {model_path}. Training from scratch!")
+    # ----------------------------------------
     # ----------------------------------------
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id if hasattr(tokenizer, 'pad_id') else 0)
