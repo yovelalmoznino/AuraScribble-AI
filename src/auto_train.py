@@ -63,12 +63,12 @@ def download_base_model():
     current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
     Path("models").mkdir(exist_ok=True)
     
-    # שימי לב שהשם כאן חייב להתאים לשם שהעלית ל-Firebase
-    blob = current_bucket.blob('models/base_model.pth')
+    # השם המדויק שיש לך ב-Storage
+    blob = current_bucket.blob('models/checkpoint_best.pt')
     
     if blob.exists():
         print("Downloading base model from Firebase...")
-        blob.download_to_filename("models/base_model.pth")
+        blob.download_to_filename("models/checkpoint_best.pt")
         print("Base model downloaded successfully.")
     else:
         print("Warning: No base model found in Firebase. Training from scratch might fail.")
