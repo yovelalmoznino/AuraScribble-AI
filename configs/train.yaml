@@ -1,7 +1,7 @@
 # מפתחות שטוחים (השכבה ש-train.py קורא ישירות)
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
-model_path: "models/base_model.pth"
+model_path: "models/checkpoint_best.pt"
 train_manifest: "data/processed/train.jsonl"
 val_manifest: "data/processed/train.jsonl"
 max_seq_len: 256
