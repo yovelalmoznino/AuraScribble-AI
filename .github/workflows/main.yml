@@ -16,7 +16,7 @@ jobs:
           
       - name: Install Dependencies
         run: |
-          pip install torch onnx firebase-admin pyyaml numpy tqdm
+          pip install torch onnx onnxscript firebase-admin pyyaml numpy tqdm
           
       - name: Firebase Authentication
         run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > firebase-service-account.json
