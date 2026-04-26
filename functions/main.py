@@ -1,11 +1,12 @@
 from firebase_functions import storage_fn
 from firebase_admin import initialize_app, storage
 import requests
+import os
 
 initialize_app()
 
 # הגדרות גיטהאב
-GITHUB_TOKEN = "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" 
+GITHUB_TOKEN = GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 REPO_OWNER = "yovelalmoznino"
 REPO_NAME = "AuraScribble-AI"
 WORKFLOW_ID = "main.yml" 
