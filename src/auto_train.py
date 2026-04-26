@@ -58,6 +58,22 @@ def upload_model():
     else:
         print(f"Model file not found at {model_path}")
 
+def cleanup_firebase_samples():
+    """מוחק את התיקונים שכבר השתמשנו בהם כדי לאפס את המונה ל-150 הבאים"""
+    print("AuraScribble: Cleaning up processed files from Firebase...")
+    bucket = storage.bucket("aurascribblr.firebasestorage.app")
+    blobs = list(bucket.list_blobs(prefix='training_data/new/'))
+    
+    deleted_count = 0
+    for blob in blobs:
+        if blob.name.endswith('.json'):
+            blob.delete()
+            deleted_count += 1
+            
+    print(f"Cleanup complete. Deleted {deleted_count} files. Counter is reset to 0.")
+
+
+
 def download_base_model():
     """מוריד את המודל המקורי מ-Firebase כדי שיהיה על מה להתאמן"""
     current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
@@ -81,5 +97,6 @@ if __name__ == "__main__":
     if new_data_count > 0:
         run_training()
         upload_model()
+        cleanup_firebase_samples()
     else:
         print("No new corrections found. System is up to date.")
