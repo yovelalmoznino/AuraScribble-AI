@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 import argparse
 import random
 from pathlib import Path
-
 import numpy as np
 import torch
 import yaml
@@ -22,12 +20,10 @@ from dataset import (
 from model import HandwritingSeq2SeqModel
 from tokenizer import CharTokenizer
 
-
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
 
 class HandwritingDataset(Dataset):
     def __init__(
@@ -50,11 +46,8 @@ class HandwritingDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
         sample = self.samples[idx]
         points = sample.points
-
-        # 1. קודם כל ממירים את הנקודות הגולמיות למאפיינים מתמטיים
         feats = points_to_relative_features(points)
         
-        # 2. הוספת אוגמנטציה על המאפיינים (מתוקן)
         if self.augment:
             feats = maybe_augment_relative_features(feats, True)
 
@@ -68,7 +61,6 @@ class HandwritingDataset(Dataset):
         
         target_tensor = torch.tensor(target_indices, dtype=torch.long)
         return input_tensor, target_tensor, sample.text
-
 
 def collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, str]]) -> dict[str, torch.Tensor | list[str]]:
     inputs, targets, texts = zip(*batch)
@@ -84,8 +76,8 @@ def collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, str]]) -> dict[str,
         "texts": list(texts),
     }
 
-
-def train(config_path: str, corrections_dir: str | None = None) -> None:
+# עדכון חתימת הפונקציה לקבלת data_path
+def train(config_path: str, corrections_dir: str | None = None, data_path: str | None = None) -> None:
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
@@ -95,12 +87,11 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # --- שאיבת המילון המקורי מתוך הגיבוי ---
     model_path = config.get("model_path", "models/checkpoint_best.pt")
     rescued_vocab = None
     checkpoint = None
     if Path(model_path).exists():
-        print("Checking checkpoint for original vocabulary...")
+        print(f"Checking checkpoint {model_path} for original vocabulary...")
         checkpoint = torch.load(model_path, map_location=device)
         if isinstance(checkpoint, dict) and "vocab" in checkpoint:
             rescued_vocab = checkpoint["vocab"]
@@ -119,16 +110,22 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         with open(config["vocab_path"], "w", encoding="utf-8") as vf:
             for v in rescued_vocab:
                 vf.write(f"{v}\n")
-    # ---------------------------------------------------
     
     print(f"Loading base training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
     val_samples = read_manifest(config["val_manifest"])
 
+    # אפשרות 1: טעינה מתיקיית קבצים בודדים (השיטה הישנה)
     if corrections_dir:
-        print(f"Integrating new corrections from {corrections_dir}...")
+        print(f"Integrating new corrections from directory: {corrections_dir}...")
         new_samples = read_firebase_corrections(corrections_dir)
         train_samples.extend(new_samples)
+
+    # אפשרות 2: טעינה מקובץ מאסטר מאוחד (השיטה ההיברידית)
+    if data_path:
+        print(f"Integrating master data from file: {data_path}...")
+        master_samples = read_manifest(data_path)
+        train_samples.extend(master_samples)
 
     train_ds = HandwritingDataset(
         train_samples, tokenizer, config["max_seq_len"], config["max_tgt_len"], augment=True
@@ -150,7 +147,6 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
         vocab_size=len(tokenizer)
     ).to(device)
 
-    # --- טעינת המשקולות ---
     if checkpoint is not None:
         print(f"Loading pre-trained weights from {model_path}...")
         if isinstance(checkpoint, dict):
@@ -166,15 +162,15 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
             model.load_state_dict(checkpoint)
         print("Weights loaded successfully!")
     else:
-        print(f"Warning: Model weights not found at {model_path}. Training from scratch!")
-    # ----------------------------------------
+        print(f"Warning: Model weights not found. Training from scratch!")
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id if hasattr(tokenizer, 'pad_id') else 0)
     
+    # שימוש ב-Learning Rate מהקונפיג (מומלץ 0.00002 ל-Fine-tuning)
     lr = config.get("learning_rate", config.get("lr", 0.0001))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    print("Starting training loop...")
+    print(f"Starting training loop for {config.get('epochs', 5)} epochs...")
     epochs = config.get("epochs", 5)
     model.train()
     for epoch in range(epochs):
@@ -218,11 +214,11 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
     )
     print("Training and export complete!")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--corrections_dir", type=str, help="Path to directory with Firebase corrections")
+    parser.add_argument("--corrections_dir", type=str, help="Path to directory with individual JSON corrections")
+    parser.add_argument("--data_path", type=str, help="Path to merged master data (.jsonl)")
     args = parser.parse_args()
 
-    train(args.config, args.corrections_dir)
+    train(args.config, args.corrections_dir, args.data_path)
