@@ -7,7 +7,7 @@ val_manifest: "data/processed/train.jsonl"
 max_seq_len: 256
 max_tgt_len: 160
 batch_size: 24
-learning_rate: 0.00002
+learning_rate: 0.000002
 epochs: 5
 device: "cpu"
 seed: 1337
