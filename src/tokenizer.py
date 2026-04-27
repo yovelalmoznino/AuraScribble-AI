@@ -3,21 +3,21 @@ import json
 from pathlib import Path
 
 class CharTokenizer:
-    def __init__(self, vocab: list[str]) -> None:
-        # תיקון NameError: שימוש ב-vocab במקום lines
-        # שימור רווחים: אנחנו מוודאים שרווחים לא נמחקים (line == ' ')
-        self.vocab = [v.replace('\n', '') for v in vocab if v.replace('\n', '') != '' or v == ' ']
+    def __init__(self, vocab_path: str | Path) -> None:
+        self.vocab_path = Path(vocab_path)
+        if self.vocab_path.exists():
+            # קוראים את השורות ושומרים על רווחים (לא עושים strip() גורף)
+            lines = self.vocab_path.read_text(encoding="utf-8").splitlines()
+            # אנחנו מסננים שורות ריקות אבל משאירים שורה שהיא רק רווח (" ")
+            self.vocab = [line.replace('\n', '') for line in lines if line.replace('\n', '') != '' or line == ' ']
+        else:
+            self.vocab = ["<blank>", "<pad>", "<bos>", "<eos>"]
+            
         self.stoi = {t: i for i, t in enumerate(self.vocab)}
         self.blank_id = self.stoi.get("<blank>", 0)
         self.pad_id = self.stoi.get("<pad>", 1)
         self.bos_id = self.stoi.get("<bos>", self.pad_id)
         self.eos_id = self.stoi.get("<eos>", self.pad_id)
-
-    @classmethod
-    def from_file(cls, path: str | Path) -> "CharTokenizer":
-        # טעינה ללא .strip() כדי לשמור על תו הרווח אם הוא קיים
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-        return cls(lines)
 
     def __len__(self):
         return len(self.vocab)
