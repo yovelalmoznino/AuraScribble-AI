@@ -5,51 +5,75 @@ import json
 from pathlib import Path
 
 # 1. הגדרות התחברות
-# 1. הגדרות התחברות
-cred = credentials.Certificate("firebase-service-account.json")
-firebase_admin.initialize_app(cred) # בלי הגדרות נוספות כאן
-bucket = storage.bucket("aurascribblr.firebasestorage.app") # השם המדויק כאן
-def download_data():
-    """מוריד את התיקונים החדשים מכל תיקיות המשנה בתוך new"""
-    current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
-    Path("data/new_samples").mkdir(parents=True, exist_ok=True)
+if not firebase_admin._apps:
+    cred = credentials.Certificate("firebase-service-account.json")
+    firebase_admin.initialize_app(cred)
+
+BUCKET_NAME = "aurascribblr.firebasestorage.app"
+bucket = storage.bucket(BUCKET_NAME)
+
+def process_and_merge_data():
+    """
+    מורידה תיקונים חדשים, ממזגת אותם לקובץ Master אחד,
+    מעלה את המאסטר המעודכן לענן ומוחקת את הקבצים הבודדים.
+    """
+    Path("data").mkdir(exist_ok=True)
+    master_path = "data/master_corrections.jsonl"
+    remote_master_path = "data/master_corrections.jsonl"
     
-    # prefix='training_data/new/' יביא את כל מה שמתחיל בנתיב הזה
-    blobs = current_bucket.list_blobs(prefix='training_data/new/')
-    count = 0
+    # --- 1. הורדת המאסטר הקיים ---
+    master_content = ""
+    blob_master = bucket.blob(remote_master_path)
+    if blob_master.exists():
+        master_content = blob_master.download_as_text().strip()
+        print("Existing master data downloaded.")
+
+    # --- 2. איסוף תיקונים חדשים ---
+    blobs = list(bucket.list_blobs(prefix='training_data/new/'))
+    new_entries = []
     
     for blob in blobs:
-        # בדיקה שזה קובץ ולא תיקייה (blobs שמסתיימים ב-/ הם תיקיות)
-        if blob.name.endswith('/'):
+        if blob.name.endswith('/') or not blob.name.endswith('.json'):
             continue
             
-        # יצירת שם קובץ ייחודי כדי שלא יהיו התנגשויות (מחליפים סלאשים בקו תחתון)
-        safe_filename = blob.name.replace('/', '_')
-        blob.download_to_filename(f"data/new_samples/{safe_filename}")
+        content = blob.download_as_text().strip()
+        new_entries.append(content)
         
-        # העברה לתיקיית processed
+        # העברה לתיקיית processed (ארכיון בענן)
         new_path = blob.name.replace('training_data/new/', 'training_data/processed/')
-        current_bucket.rename_blob(blob, new_path)
-        
-        count += 1
-        print(f"Downloaded: {blob.name}")
-        
-    return count
+        bucket.rename_blob(blob, new_path)
+        print(f"Processed: {blob.name}")
 
-def run_training():
-    """מפעיל את קוד האימון המעודכן"""
-    print("Starting fine-tuning...")
-    # יצירת תיקיית פלט כדי שלא תהיה שגיאת נתיב
+    if not new_entries:
+        return 0, master_path
+
+    # --- 3. מיזוג ושמירה מקומית ---
+    # מוודא שכל שורה היא JSON תקין ומחבר למאסטר
+    combined_content = master_content
+    if combined_content:
+        combined_content += "\n"
+    combined_content += "\n".join(new_entries)
+
+    with open(master_path, 'w', encoding='utf-8') as f:
+        f.write(combined_content.strip())
+
+    # --- 4. עדכון המאסטר בענן (לשימוש עתידי בקאגל) ---
+    blob_master.upload_from_filename(master_path)
+    print(f"Success: Master file updated with {len(new_entries)} new corrections.")
+    
+    return len(new_entries), master_path
+
+def run_training(data_path):
+    """מפעיל את קוד האימון על קובץ המאסטר המאוחד"""
+    print(f"Starting fine-tuning using {data_path}...")
     os.makedirs("output", exist_ok=True)
     
-    # הרצה עם הגדרת output_dir מפורשת בתוך הפקודה
-    # אנחנו מוסיפים דגל שיגרום ל-train.py להשתמש בתיקייה שיצרנו
-    cmd = "python src/train.py --config configs/train.yaml --corrections_dir data/new_samples"
+    # עדכון פקודת האימון שתשתמש בקובץ ה-jsonl המאוחד במקום בתיקייה
+    cmd = f"python src/train.py --config configs/train.yaml --data_path {data_path} --epochs 5"
     os.system(cmd)
     
 def upload_model():
     """מעלה את המודל המשופר חזרה לענן"""
-    # הנתיב צריך להיות output/model.onnx (או השם שמוגדר ב-export)
     model_path = "output/latest_model.onnx" 
     if os.path.exists(model_path):
         blob = bucket.blob('models/latest_handwriting.onnx')
@@ -58,45 +82,27 @@ def upload_model():
     else:
         print(f"Model file not found at {model_path}")
 
-def cleanup_firebase_samples():
-    """מוחק את התיקונים שכבר השתמשנו בהם כדי לאפס את המונה ל-150 הבאים"""
-    print("AuraScribble: Cleaning up processed files from Firebase...")
-    bucket = storage.bucket("aurascribblr.firebasestorage.app")
-    blobs = list(bucket.list_blobs(prefix='training_data/new/'))
-    
-    deleted_count = 0
-    for blob in blobs:
-        if blob.name.endswith('.json'):
-            blob.delete()
-            deleted_count += 1
-            
-    print(f"Cleanup complete. Deleted {deleted_count} files. Counter is reset to 0.")
-
-
-
 def download_base_model():
-    """מוריד את המודל המקורי מ-Firebase כדי שיהיה על מה להתאמן"""
-    current_bucket = storage.bucket("aurascribblr.firebasestorage.app")
+    """מוריד את ה-Weights המקוריים (PyTorch) להתחלת Fine-tuning"""
     Path("models").mkdir(exist_ok=True)
-    
-    # השם המדויק שיש לך ב-Storage
-    blob = current_bucket.blob('models/checkpoint_best.pt')
+    blob = bucket.blob('models/checkpoint_best.pt')
     
     if blob.exists():
-        print("Downloading base model from Firebase...")
         blob.download_to_filename("models/checkpoint_best.pt")
-        print("Base model downloaded successfully.")
+        print("Base model weights downloaded.")
     else:
-        print("Warning: No base model found in Firebase. Training from scratch might fail.")
-
-
+        print("Warning: No base model weights found.")
 
 if __name__ == "__main__":
-    new_data_count = download_data()
-    download_base_model()
-    if new_data_count > 0:
-        run_training()
+    # 1. עיבוד ומיזוג נתונים
+    new_count, local_data_file = process_and_merge_data()
+    
+    if new_count > 0:
+        # 2. הכנת המודל
+        download_base_model()
+        # 3. אימון (Fine-tuning)
+        run_training(local_data_file)
+        # 4. העלאת תוצאה
         upload_model()
-        cleanup_firebase_samples()
     else:
-        print("No new corrections found. System is up to date.")
+        print("No new corrections to process. System is up to date.")
