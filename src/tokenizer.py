@@ -4,7 +4,7 @@ from pathlib import Path
 
 class CharTokenizer:
     def __init__(self, vocab: list[str]) -> None:
-        self.vocab = vocab
+        self.vocab = [line.replace('\n', '') for line in lines if line.replace('\n', '') != '']
         self.stoi = {t: i for i, t in enumerate(vocab)}
         self.blank_id = self.stoi.get("<blank>", 0)  # CTC compatibility
         self.pad_id = self.stoi.get("<pad>", 1)
