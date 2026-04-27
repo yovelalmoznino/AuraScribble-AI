@@ -109,21 +109,23 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     tokenizer = CharTokenizer(config["vocab_path"])
     
     if rescued_vocab:
-        tokenizer.vocab = rescued_vocab
-        tokenizer.stoi = {t: i for i, t in enumerate(rescued_vocab)}
+        # עדכון המילון בתוך ה-tokenizer ושמירה לקובץ
+        tokenizer.vocab = [v.replace('\n', '') for v in rescued_vocab if v.replace('\n', '') != '' or v == ' ']
+        tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
         tokenizer.blank_id = tokenizer.stoi.get("<blank>", 0)
         tokenizer.pad_id = tokenizer.stoi.get("<pad>", 1)
         tokenizer.bos_id = tokenizer.stoi.get("<bos>", tokenizer.pad_id)
         tokenizer.eos_id = tokenizer.stoi.get("<eos>", tokenizer.pad_id)
         
         with open(config["vocab_path"], "w", encoding="utf-8") as vf:
-            for v in rescued_vocab:
+            for v in tokenizer.vocab:
                 vf.write(f"{v}\n")
     
     # --- טעינת נתונים ---
     print(f"Loading base training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
-    
+    val_samples = read_manifest(config["val_manifest"])
+
     if corrections_dir:
         print(f"Integrating new corrections from directory: {corrections_dir}...")
         new_samples = read_firebase_corrections(corrections_dir)
@@ -167,10 +169,11 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id)
     
     # --- הגדרת אימון ---
+    # ל-Fine-tuning של תיקונים מומלץ להשתמש ב-LR נמוך מאוד (למשל 0.00002)
     lr = config.get("learning_rate", config.get("lr", 0.0001))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # תיקון לוגיקת ה-Epochs: עדיפות לפרמטר מה-CLI
+    # קביעת מספר ה-Epochs (עדיפות למה שנשלח ב-Command Line)
     epochs_to_run = epochs if epochs is not None else config.get("epochs", 5)
     print(f"Starting training loop for {epochs_to_run} epochs...")
 
@@ -223,10 +226,9 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
     parser.add_argument("--corrections_dir", type=str, help="Path to individual JSON corrections")
     parser.add_argument("--data_path", type=str, help="Path to merged master data (.jsonl)")
-    parser.add_argument("--epochs", type=int, help="Number of epochs to train") # נוסף כדי למנוע את השגיאה
+    parser.add_argument("--epochs", type=int, help="Number of epochs to train")
     args = parser.parse_args()
 
-    # שליחת כל הפרמטרים לפונקציית האימון
     train(
         config_path=args.config, 
         corrections_dir=args.corrections_dir, 
