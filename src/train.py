@@ -198,9 +198,11 @@ def train(config_path: str, corrections_dir: str | None = None) -> None:
 
     print("Exporting model to ONNX...")
     model.eval()
-    dummy_src = torch.zeros(1, 10, config["input_dim"]).to(device)
-    dummy_lens = torch.tensor([10], dtype=torch.long).to(device)
-    dummy_tgt = torch.zeros(1, 5, dtype=torch.long).to(device)
+    max_t = config.get("max_seq_len", 128)
+    max_u = config.get("max_tgt_len", 160)
+    dummy_src = torch.zeros(1, max_t, config["input_dim"]).to(device)
+    dummy_lens = torch.tensor([max_t], dtype=torch.long).to(device)
+    dummy_tgt = torch.zeros(1, max_u, dtype=torch.long).to(device)
     
     torch.onnx.export(
         model,
