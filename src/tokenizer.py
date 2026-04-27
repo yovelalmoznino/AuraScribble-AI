@@ -4,26 +4,26 @@ from pathlib import Path
 
 class CharTokenizer:
     def __init__(self, vocab: list[str]) -> None:
-        self.vocab = [line.replace('\n', '') for line in lines if line.replace('\n', '') != '']
-        self.stoi = {t: i for i, t in enumerate(vocab)}
-        self.blank_id = self.stoi.get("<blank>", 0)  # CTC compatibility
+        # תיקון NameError: שימוש ב-vocab במקום lines
+        # שימור רווחים: אנחנו מוודאים שרווחים לא נמחקים (line == ' ')
+        self.vocab = [v.replace('\n', '') for v in vocab if v.replace('\n', '') != '' or v == ' ']
+        self.stoi = {t: i for i, t in enumerate(self.vocab)}
+        self.blank_id = self.stoi.get("<blank>", 0)
         self.pad_id = self.stoi.get("<pad>", 1)
         self.bos_id = self.stoi.get("<bos>", self.pad_id)
         self.eos_id = self.stoi.get("<eos>", self.pad_id)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "CharTokenizer":
-        vocab = [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
-        return cls(vocab)
+        # טעינה ללא .strip() כדי לשמור על תו הרווח אם הוא קיים
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        return cls(lines)
 
     def __len__(self):
-        # מחזיר את אורך רשימת ה-vocab
-        # בדרך כלל אין צורך ב-+1 אם ה-padding כבר כלול בתוך ה-vocab (והוא כלול אצלך)
         return len(self.vocab)
 
     @property
     def vocab_size(self):
-        # מאפשר לקוד ב-train.py לקרוא למאפיין הזה ישירות
         return len(self)
 
     @staticmethod
@@ -31,11 +31,6 @@ class CharTokenizer:
         return any("\u0590" <= ch <= "\u05FF" for ch in text)
 
     def preprocess_text_for_tokens(self, text: str, rtl_aware: bool = True) -> str:
-        """
-        Returns the string in token chronology (drawing order).
-        For Hebrew runs, we reverse the textual order so the first drawn character maps
-        to the first token when training against online pen trajectories.
-        """
         if rtl_aware and self._contains_hebrew(text):
             return text[::-1]
         return text
