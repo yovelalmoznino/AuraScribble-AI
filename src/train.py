@@ -50,11 +50,8 @@ class HandwritingDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
         sample = self.samples[idx]
         points = sample.points
-
-        # 1. המרה למאפיינים מתמטיים
         feats = points_to_relative_features(points)
         
-        # 2. אוגמנטציה
         if self.augment:
             feats = maybe_augment_relative_features(feats, True)
 
@@ -95,7 +92,7 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # --- טעינת מילון מה-Checkpoint ---
+    # --- טעינת מילון מה-Checkpoint (הלוגיקה המקורית שלך) ---
     model_path = config.get("model_path", "models/checkpoint_best.pt")
     rescued_vocab = None
     checkpoint = None
@@ -109,22 +106,21 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     tokenizer = CharTokenizer(config["vocab_path"])
     
     if rescued_vocab:
-        # עדכון המילון בתוך ה-tokenizer ושמירה לקובץ
+        # עדכון המילון בתוך ה-tokenizer ושמירה לקובץ (עם הגנה לסביבות Read-only)
         tokenizer.vocab = [v.replace('\n', '') for v in rescued_vocab if v.replace('\n', '') != '' or v == ' ']
         tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
-        tokenizer.blank_id = tokenizer.stoi.get("<blank>", 0)
-        tokenizer.pad_id = tokenizer.stoi.get("<pad>", 1)
-        tokenizer.bos_id = tokenizer.stoi.get("<bos>", tokenizer.pad_id)
-        tokenizer.eos_id = tokenizer.stoi.get("<eos>", tokenizer.pad_id)
         
-        with open(config["vocab_path"], "w", encoding="utf-8") as vf:
-            for v in tokenizer.vocab:
-                vf.write(f"{v}\n")
+        try:
+            vocab_p = Path(config["vocab_path"])
+            vocab_p.parent.mkdir(parents=True, exist_ok=True)
+            with open(vocab_p, "w", encoding="utf-8") as vf:
+                for v in tokenizer.vocab: vf.write(f"{v}\n")
+        except Exception as e:
+            print(f"Warning: Could not write vocab file to original path: {e}. Keeping in memory.")
     
     # --- טעינת נתונים ---
     print(f"Loading base training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
-    val_samples = read_manifest(config["val_manifest"])
 
     if corrections_dir:
         print(f"Integrating new corrections from directory: {corrections_dir}...")
@@ -189,7 +185,6 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
             loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
             loss.backward()
             optimizer.step()
-            
             total_loss += loss.item()
             
         avg_loss = total_loss / max(1, len(train_loader))
@@ -197,12 +192,12 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
 
     # --- שמירת Checkpoint מעודכן (חשוב עבור קאגל!) ---
     checkpoint_out_path = out_dir / "checkpoint_best.pt"
-    print(f"Saving updated checkpoint to {checkpoint_out_path}...")
     torch.save({
         "model_state": model.state_dict(),
         "vocab": tokenizer.vocab,
         "config": config,
     }, checkpoint_out_path)
+    print(f"Updated checkpoint saved to {checkpoint_out_path}")
 
     # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
