@@ -6,9 +6,9 @@ class CharTokenizer:
     def __init__(self, vocab_path: str | Path) -> None:
         self.vocab_path = Path(vocab_path)
         if self.vocab_path.exists():
-            # קוראים את השורות ושומרים על רווחים (לא עושים strip() גורף)
+            # קוראים את השורות ושומרים על רווחים
             lines = self.vocab_path.read_text(encoding="utf-8").splitlines()
-            # אנחנו מסננים שורות ריקות אבל משאירים שורה שהיא רק רווח (" ")
+            # סינון שורות ריקות תוך שמירה על רווח בודד
             self.vocab = [line.replace('\n', '') for line in lines if line.replace('\n', '') != '' or line == ' ']
         else:
             self.vocab = ["<blank>", "<pad>", "<bos>", "<eos>"]
