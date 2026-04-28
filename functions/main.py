@@ -6,7 +6,7 @@ import os
 initialize_app()
 
 # הגדרות גיטהאב
-GITHUB_TOKEN = GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 REPO_OWNER = "yovelalmoznino"
 REPO_NAME = "AuraScribble-AI"
 WORKFLOW_ID = "main.yml" 
