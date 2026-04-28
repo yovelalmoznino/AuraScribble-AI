@@ -169,11 +169,9 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id)
     
     # --- הגדרת אימון ---
-    # ל-Fine-tuning של תיקונים מומלץ להשתמש ב-LR נמוך מאוד (למשל 0.00002)
     lr = config.get("learning_rate", config.get("lr", 0.0001))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # קביעת מספר ה-Epochs (עדיפות למה שנשלח ב-Command Line)
     epochs_to_run = epochs if epochs is not None else config.get("epochs", 5)
     print(f"Starting training loop for {epochs_to_run} epochs...")
 
@@ -196,6 +194,15 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
             
         avg_loss = total_loss / max(1, len(train_loader))
         print(f"Epoch {epoch+1}/{epochs_to_run} - Loss: {avg_loss:.4f}")
+
+    # --- שמירת Checkpoint מעודכן (חשוב עבור קאגל!) ---
+    checkpoint_out_path = out_dir / "checkpoint_best.pt"
+    print(f"Saving updated checkpoint to {checkpoint_out_path}...")
+    torch.save({
+        "model_state": model.state_dict(),
+        "vocab": tokenizer.vocab,
+        "config": config,
+    }, checkpoint_out_path)
 
     # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
