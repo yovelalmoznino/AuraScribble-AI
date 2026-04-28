@@ -10,7 +10,7 @@ GITHUB_TOKEN = GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 REPO_OWNER = "yovelalmoznino"
 REPO_NAME = "AuraScribble-AI"
 WORKFLOW_ID = "main.yml" 
-THRESHOLD = 150
+THRESHOLD = 500
 
 @storage_fn.on_object_finalized()
 def trigger_training_on_threshold(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]):
