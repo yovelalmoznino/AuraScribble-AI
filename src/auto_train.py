@@ -1,6 +1,7 @@
 import firebase_admin
 from firebase_admin import credentials, storage
 import os
+import sys
 import json
 from pathlib import Path
 
@@ -68,7 +69,10 @@ def run_training(data_path):
     os.makedirs("output", exist_ok=True)
     
     cmd = f"python src/train.py --config configs/train.yaml --data_path {data_path} --epochs 5"
-    os.system(cmd)
+    
+    # בדיקה שהאימון לא קרס
+    if os.system(cmd) != 0:
+        sys.exit("Error: Training script failed! Aborting upload to Firebase.")
     
 def upload_model():
     """מעלה את המודלים המשופרים חזרה לענן (ONNX ו-PT)"""
@@ -87,25 +91,30 @@ def upload_model():
         print(f"Checkpoint file not found at {pt_path}")
 
 def download_base_model():
-    """מוריד את ה-Weights המקוריים (PyTorch) להתחלת Fine-tuning"""
+    """מוריד את ה-Weights המקוריים (PyTorch) להתחלת Fine-tuning ומחזיר סטטוס הצלחה"""
     Path("models").mkdir(exist_ok=True)
     blob = bucket.blob('models/checkpoint_best.pt')
     
     if blob.exists():
         blob.download_to_filename("models/checkpoint_best.pt")
         print("Base model weights downloaded.")
+        return True
     else:
-        print("Warning: No base model weights found.")
+        print("CRITICAL WARNING: No base model weights found in Firebase.")
+        return False
 
 if __name__ == "__main__":
     # 1. עיבוד ומיזוג נתונים
     new_count, local_data_file = process_and_merge_data()
     
     if new_count > 0:
-        # 2. הכנת המודל
-        download_base_model()
+        # 2. הכנת המודל והגנה על משקולות בסיס
+        if not download_base_model():
+            sys.exit("Aborting auto-train: Base weights are missing. We don't want to train from scratch and overwrite the model!")
+            
         # 3. אימון (Fine-tuning)
         run_training(local_data_file)
+        
         # 4. העלאת תוצאה
         upload_model()
     else:
