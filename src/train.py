@@ -200,28 +200,42 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     print(f"Updated checkpoint saved to {checkpoint_out_path}")
 
     # --- ייצוא ל-ONNX ---
+    # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
     model.eval()
-    model.cpu()
-    max_t = config.get("max_seq_len", 128)
-    max_u = config.get("max_tgt_len", 160)
-    dummy_src = torch.zeros(1, max_t, config["input_dim"]).to(device)
-    dummy_lens = torch.tensor([max_t], dtype=torch.long).to(device)
-    dummy_tgt = torch.zeros(1, max_u, dtype=torch.long).to(device)
+    model.cpu() # העברה בטוחה למעבד
     
-    torch.onnx.export(
-        model,
-        (dummy_src, dummy_lens, dummy_tgt),
-        out_dir / "latest_model.onnx",
-        input_names=["src", "src_lens", "tgt_inp"],
-        output_names=["logits"],
-        dynamic_axes={
-            "src": {0: "batch", 1: "seq"}, 
-            "tgt_inp": {0: "batch", 1: "seq_tgt"},
-            "logits": {0: "batch", 1: "seq_tgt"}
-        },
-    )
-    print("Training and export complete!")
+    # שימוש בערכים מה-Config כדי למנוע חוסר התאמה
+    max_t = config.get("max_seq_len", 128)
+    input_dim = config["input_dim"]
+    
+    # יצירת קלטים דוגמה על ה-CPU
+    dummy_src = torch.randn(1, max_t, input_dim)
+    dummy_lens = torch.tensor([max_t], dtype=torch.long)
+    # נדרש Dummy Target כי ה-forward של המודל מצפה ל-3 ארגומנטים
+    dummy_tgt = torch.zeros(1, 1, dtype=torch.long) 
+
+    try:
+        print("🔄 מנסה לייצא ל-ONNX (מצב CPU Safe)...")
+        onnx_file_path = out_dir / "latest_model.onnx" # שימוש ב-out_dir הנכון
+        
+        torch.onnx.export(
+            model, 
+            (dummy_src, dummy_lens, dummy_tgt), # העברת כל הארגומנטים כ-tuple
+            str(onnx_file_path),
+            export_params=True,
+            opset_version=14, 
+            do_constant_folding=True,
+            input_names=['inputs', 'input_lens', 'targets'],
+            output_names=['output'],
+            dynamic_axes={
+                'inputs': {1: 'sequence_length'},
+                'output': {1: 'sequence_length'}
+            }
+        )
+        print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
+    except Exception as e:
+        print(f"❌ ONNX export failed: {e}")
 
 
 if __name__ == "__main__":
