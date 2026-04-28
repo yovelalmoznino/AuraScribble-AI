@@ -202,6 +202,7 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
     model.eval()
+    model.cpu()
     max_t = config.get("max_seq_len", 128)
     max_u = config.get("max_tgt_len", 160)
     dummy_src = torch.zeros(1, max_t, config["input_dim"]).to(device)
