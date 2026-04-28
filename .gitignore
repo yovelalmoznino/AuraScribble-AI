@@ -15,3 +15,4 @@ output/
 *.ckpt
 
 !data/processed/*.jsonl
+/dataset-metadata.json
