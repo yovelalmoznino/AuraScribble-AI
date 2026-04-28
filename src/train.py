@@ -226,15 +226,18 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--corrections_dir", type=str, help="Path to individual JSON corrections")
+    # ודאי שהשורות האלו קיימות כאן:
+    parser.add_argument("--config", type=str, required=True, help="Path to config file")
     parser.add_argument("--data_path", type=str, help="Path to merged master data (.jsonl)")
-    parser.add_argument("--epochs", type=int, help="Number of epochs to train")
+    parser.add_argument("--epochs", type=int, help="Number of training epochs")
+    parser.add_argument("--corrections_dir", type=str, help="Path to corrections directory")
+    
     args = parser.parse_args()
 
+    # כאן אנחנו מעבירים את הערכים מהטרמינל לתוך הפונקציה train
     train(
-        config_path=args.config, 
-        corrections_dir=args.corrections_dir, 
-        data_path=args.data_path, 
-        epochs=args.epochs
+        config_path=args.config,
+        data_path=args.data_path,
+        epochs=args.epochs,
+        corrections_dir=args.corrections_dir
     )
