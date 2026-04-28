@@ -48,7 +48,6 @@ def process_and_merge_data():
         return 0, master_path
 
     # --- 3. מיזוג ושמירה מקומית ---
-    # מוודא שכל שורה היא JSON תקין ומחבר למאסטר
     combined_content = master_content
     if combined_content:
         combined_content += "\n"
@@ -68,19 +67,24 @@ def run_training(data_path):
     print(f"Starting fine-tuning using {data_path}...")
     os.makedirs("output", exist_ok=True)
     
-    # עדכון פקודת האימון שתשתמש בקובץ ה-jsonl המאוחד במקום בתיקייה
     cmd = f"python src/train.py --config configs/train.yaml --data_path {data_path} --epochs 5"
     os.system(cmd)
     
 def upload_model():
-    """מעלה את המודל המשופר חזרה לענן"""
-    model_path = "output/latest_model.onnx" 
-    if os.path.exists(model_path):
-        blob = bucket.blob('models/latest_handwriting.onnx')
-        blob.upload_from_filename(model_path)
-        print("New model uploaded to Firebase!")
+    """מעלה את המודלים המשופרים חזרה לענן (ONNX ו-PT)"""
+    # 1. העלאת ONNX לאפליקציה
+    onnx_path = "output/latest_model.onnx" 
+    if os.path.exists(onnx_path):
+        bucket.blob('models/latest_handwriting.onnx').upload_from_filename(onnx_path)
+        print("New ONNX model uploaded to Firebase!")
+
+    # 2. העלאת PT להמשכיות אימון (חשוב עבור קאגל!)
+    pt_path = "output/checkpoint_best.pt"
+    if os.path.exists(pt_path):
+        bucket.blob('models/checkpoint_best.pt').upload_from_filename(pt_path)
+        print("New PyTorch checkpoint uploaded to Firebase!")
     else:
-        print(f"Model file not found at {model_path}")
+        print(f"Checkpoint file not found at {pt_path}")
 
 def download_base_model():
     """מוריד את ה-Weights המקוריים (PyTorch) להתחלת Fine-tuning"""
