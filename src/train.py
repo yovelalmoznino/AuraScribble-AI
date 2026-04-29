@@ -200,34 +200,42 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     print(f"Updated checkpoint saved to {checkpoint_out_path}")
 
   # --- ייצוא ל-ONNX ---
+# --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
     model.eval()
-    model.cpu()
-    
-    # פתרון לבעיית ה-LSTM Weights שראינו באזהרות
-    if hasattr(model, 'encoder'): model.encoder.flatten_parameters()
-    if hasattr(model, 'decoder'): model.decoder.flatten_parameters()
+    model.to('cpu') # ודואים שהכל על המעבד
+
+    # 1. סידור משקולות ה-LSTM (פותר את אזהרת ה-_flat_weights)
+    for m in model.modules():
+        if isinstance(m, torch.nn.LSTM):
+            m.flatten_parameters()
 
     input_dim = config["input_dim"]
-    # קלט דוגמה קטן ופשוט
-    dummy_src = torch.randn(1, 10, input_dim)
-    dummy_lens = torch.tensor([10], dtype=torch.long)
+    max_t = 10 # אורך זמני לבדיקה
+    
+    # 2. יצירת קלטים דוגמה
+    dummy_src = torch.randn(1, max_t, input_dim)
+    dummy_lens = torch.tensor([max_t], dtype=torch.long)
     dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
+    dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
 
     try:
         onnx_file_path = out_dir / "latest_model.onnx"
         
-        # שימוש בפורמט הישן והיציב יותר
+        print("🔄 מריץ JIT Trace לעקיפת Dynamo...")
+        # אנחנו "מקפיאים" את הלוגיקה של המודל לפני הייצוא
+        traced_model = torch.jit.trace(model, dummy_inputs, check_trace=False)
+
+        print("🔄 מייצא ל-ONNX (Legacy Path)...")
         torch.onnx.export(
-            model, 
-            (dummy_src, dummy_lens, dummy_tgt),
+            traced_model, 
+            dummy_inputs,
             str(onnx_file_path),
             export_params=True,
-            opset_version=17, # גרסה גבוהה ויציבה
+            opset_version=15, # גרסה יציבה מאוד ל-RNN
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            # הגדרת דינמיות בצורה מפורשת יותר
             dynamic_axes={
                 'inputs': {1: 'sequence_length'},
                 'output': {1: 'sequence_length'}
