@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-# הגדרת ממד דינמי לפי הפרוטוקול החדש
 import torch.export
 import yaml
 from torch import nn
@@ -49,7 +48,7 @@ class HandwritingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str, str]:
         sample = self.samples[idx]
         points = sample.points
         feats = points_to_relative_features(points)
@@ -66,11 +65,12 @@ class HandwritingDataset(Dataset):
             target_indices = target_indices[: self.max_tgt_len]
         
         target_tensor = torch.tensor(target_indices, dtype=torch.long)
-        return input_tensor, target_tensor, sample.text
+        # החזרה של ה-mode (סוג המידע) לצורך לוגים מפורטים
+        return input_tensor, target_tensor, sample.text, sample.mode
 
 
-def collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, str]]) -> dict[str, torch.Tensor | list[str]]:
-    inputs, targets, texts = zip(*batch)
+def collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, str, str]]) -> dict[str, torch.Tensor | list[str]]:
+    inputs, targets, texts, modes = zip(*batch)
     input_lens = torch.tensor([len(x) for x in inputs], dtype=torch.long)
     target_lens = torch.tensor([len(y) for y in targets], dtype=torch.long)
     inputs_padded = pad_sequence(inputs, batch_first=True, padding_value=0.0)
@@ -81,6 +81,7 @@ def collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, str]]) -> dict[str,
         "targets": targets_padded,
         "target_lens": target_lens,
         "texts": list(texts),
+        "modes": list(modes),
     }
 
 
@@ -94,7 +95,7 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # --- טעינת מילון מה-Checkpoint (הלוגיקה המקורית שלך) ---
+    # --- טעינת מילון מה-Checkpoint ---
     model_path = config.get("model_path", "models/checkpoint_best.pt")
     rescued_vocab = None
     checkpoint = None
@@ -108,7 +109,6 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     tokenizer = CharTokenizer(config["vocab_path"])
     
     if rescued_vocab:
-        # עדכון המילון בתוך ה-tokenizer ושמירה לקובץ (עם הגנה לסביבות Read-only)
         tokenizer.vocab = [v.replace('\n', '') for v in rescued_vocab if v.replace('\n', '') != '' or v == ' ']
         tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
         
@@ -164,7 +164,8 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     else:
         print(f"Warning: Model weights not found. Training from scratch!")
 
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id)
+    # שימוש ב-reduction='none' כדי לאפשר חישוב סטטיסטיקה לפי סוג מידע
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, reduction='none')
     
     # --- הגדרת אימון ---
     lr = config.get("learning_rate", config.get("lr", 0.0001))
@@ -176,23 +177,49 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     model.train()
     for epoch in range(epochs_to_run):
         total_loss = 0.0
+        # מילון למעקב אחרי ה-Loss לפי סוג (mode)
+        mode_stats = {"english": [], "math": [], "hebrew": [], "synthetic": [], "correction": []}
+        
         for batch_idx, batch in enumerate(train_loader):
             inputs = batch["inputs"].to(device)
             input_lens = batch["input_lens"].to(device)
             targets = batch["targets"].to(device)
+            modes = batch["modes"]
             
             optimizer.zero_grad()
             logits = model(inputs, input_lens, targets)
             
-            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            # חישוב ה-Loss הגולמי
+            raw_loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            # חישוב ממוצע לכל דוגמה בבאץ'
+            per_sample_loss = raw_loss.view(targets.size(0), -1).mean(dim=1)
+            
+            # שיוך ה-Loss לסוג המידע המתאים
+            for i, mode in enumerate(modes):
+                mode_key = mode.lower()
+                if mode_key in mode_stats:
+                    mode_stats[mode_key].append(per_sample_loss[i].item())
+                else:
+                    # טיפול במקרים של שמות מצבים לא צפויים
+                    if mode_key not in mode_stats: mode_stats[mode_key] = []
+                    mode_stats[mode_key].append(per_sample_loss[i].item())
+            
+            loss = per_sample_loss.mean()
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
             
         avg_loss = total_loss / max(1, len(train_loader))
-        print(f"Epoch {epoch+1}/{epochs_to_run} - Loss: {avg_loss:.4f}")
+        
+        # הדפסת לוג מפורט בסוף האפוק
+        log_str = f"Epoch {epoch+1}/{epochs_to_run} - Loss: {avg_loss:.4f}"
+        for m, losses in mode_stats.items():
+            if losses:
+                m_avg = sum(losses) / len(losses)
+                log_str += f" | {m}: {m_avg:.4f}"
+        print(log_str)
 
-    # --- שמירת Checkpoint מעודכן (חשוב עבור קאגל!) ---
+    # --- שמירת Checkpoint מעודכן ---
     checkpoint_out_path = out_dir / "checkpoint_best.pt"
     torch.save({
         "model_state": model.state_dict(),
@@ -201,12 +228,11 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     }, checkpoint_out_path)
     print(f"Updated checkpoint saved to {checkpoint_out_path}")
 
- # --- ייצוא ל-ONNX ---
+    # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
     model.eval()
     model.to('cpu') 
 
-    # סידור משקולות ה-LSTM (קריטי למניעת אזהרות)
     for m in model.modules():
         if isinstance(m, torch.nn.LSTM):
             m.flatten_parameters()
@@ -216,11 +242,13 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     dummy_lens = torch.tensor([10], dtype=torch.long)
     dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
     dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
+    
     try:
+        # עדכון שם הקובץ ל-handwriting.onnx כפי שהוגדר
         onnx_file_path = out_dir / "handwriting.onnx"
         print(f"🔄 מייצא ל-ONNX (handwriting.onnx) באמצעות dynamic_shapes...")
 
-        # הגדרת ממדים דינמיים עבור Batch, אורך קלט ואורך פלט
+        # הגדרת ממדים דינמיים לפי הפרוטוקול העדכני
         d_batch = torch.export.Dim("batch_size", min=1, max=1024)
         d_seq = torch.export.Dim("seq_len", min=1, max=2048)
         d_tgt_len = torch.export.Dim("tgt_len", min=1, max=512)
@@ -234,7 +262,7 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            # חובה לכלול את כל שמות הארגומנטים כפי שהם מופיעים ב-forward
+            # שימוש במפתחות התואמים לחתימת המודל: src, src_lens, tgt_inp
             dynamic_shapes={
                 'src': {0: d_batch, 1: d_seq},
                 'src_lens': {0: d_batch},
@@ -246,10 +274,8 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
         print(f"❌ ONNX export failed: {e}")
         
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # ודאי שהשורות האלו קיימות כאן:
     parser.add_argument("--config", type=str, required=True, help="Path to config file")
     parser.add_argument("--data_path", type=str, help="Path to merged master data (.jsonl)")
     parser.add_argument("--epochs", type=int, help="Number of training epochs")
@@ -257,7 +283,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    # כאן אנחנו מעבירים את הערכים מהטרמינל לתוך הפונקציה train
     train(
         config_path=args.config,
         data_path=args.data_path,
