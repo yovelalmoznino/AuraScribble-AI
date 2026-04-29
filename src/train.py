@@ -217,11 +217,13 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
     dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
     try:
-        onnx_file_path = out_dir / "latest_handwriting.onnx"
-        print("🔄 מייצא ל-ONNX באמצעות dynamic_shapes (התאמה ל-PT 2026)...")
-        
-        # הגדרת הממד הדינמי (sequence length)
+        onnx_file_path = out_dir / "handwriting.onnx"
+        print(f"🔄 מייצא ל-ONNX (handwriting.onnx) באמצעות dynamic_shapes...")
+
+        # הגדרת ממדים דינמיים עבור Batch, אורך קלט ואורך פלט
+        d_batch = torch.export.Dim("batch_size", min=1, max=1024)
         d_seq = torch.export.Dim("seq_len", min=1, max=2048)
+        d_tgt_len = torch.export.Dim("tgt_len", min=1, max=512)
         
         torch.onnx.export(
             model,
@@ -232,14 +234,17 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            # תיקון השם ל-'src' כדי להתאים ל-Signature של המודל
+            # חובה לכלול את כל שמות הארגומנטים כפי שהם מופיעים ב-forward
             dynamic_shapes={
-                'src': {1: d_seq} 
+                'src': {0: d_batch, 1: d_seq},
+                'src_lens': {0: d_batch},
+                'tgt_inp': {0: d_batch, 1: d_tgt_len}
             }
         )
         print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
     except Exception as e:
         print(f"❌ ONNX export failed: {e}")
+        
 
 
 if __name__ == "__main__":
