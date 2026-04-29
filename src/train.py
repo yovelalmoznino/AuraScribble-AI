@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+# הגדרת ממד דינמי לפי הפרוטוקול החדש
+import torch.export
 import yaml
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -219,8 +221,7 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
         onnx_file_path = out_dir / "latest_model.onnx"
         print("🔄 מייצא ל-ONNX באמצעות dynamic_shapes (התאמה ל-PT 2026)...")
         
-        # הגדרת ממד דינמי לפי הפרוטוקול החדש
-        import torch.export
+
         # אנחנו מגדירים שממד ה-sequence יכול להשתנות בין 1 ל-2048
         d_seq = torch.export.Dim("seq_len", min=1, max=2048)
         
