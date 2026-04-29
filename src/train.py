@@ -216,13 +216,11 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     dummy_lens = torch.tensor([10], dtype=torch.long)
     dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
     dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
-
     try:
-        try:
-        onnx_file_path = out_dir / "latest_model.onnx"
+        onnx_file_path = out_dir / "latest_handwriting.onnx"
         print("🔄 מייצא ל-ONNX באמצעות dynamic_shapes (התאמה ל-PT 2026)...")
         
-        # הגדרת הממד הדינמי
+        # הגדרת הממד הדינמי (sequence length)
         d_seq = torch.export.Dim("seq_len", min=1, max=2048)
         
         torch.onnx.export(
@@ -230,11 +228,11 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
             dummy_inputs,
             str(onnx_file_path),
             export_params=True,
-            opset_version=18, # עדכון ל-18 לפי המלצת המערכת
+            opset_version=18, 
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            # התיקון הקריטי: שימוש ב-'src' במקום 'inputs'
+            # תיקון השם ל-'src' כדי להתאים ל-Signature של המודל
             dynamic_shapes={
                 'src': {1: d_seq} 
             }
