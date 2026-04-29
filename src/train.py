@@ -199,35 +199,35 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     }, checkpoint_out_path)
     print(f"Updated checkpoint saved to {checkpoint_out_path}")
 
-    # --- ייצוא ל-ONNX ---
-    # --- ייצוא ל-ONNX ---
+  # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
     model.eval()
-    model.cpu() # העברה בטוחה למעבד
+    model.cpu()
     
-    # שימוש בערכים מה-Config כדי למנוע חוסר התאמה
-    max_t = config.get("max_seq_len", 128)
+    # פתרון לבעיית ה-LSTM Weights שראינו באזהרות
+    if hasattr(model, 'encoder'): model.encoder.flatten_parameters()
+    if hasattr(model, 'decoder'): model.decoder.flatten_parameters()
+
     input_dim = config["input_dim"]
-    
-    # יצירת קלטים דוגמה על ה-CPU
-    dummy_src = torch.randn(1, max_t, input_dim)
-    dummy_lens = torch.tensor([max_t], dtype=torch.long)
-    # נדרש Dummy Target כי ה-forward של המודל מצפה ל-3 ארגומנטים
-    dummy_tgt = torch.zeros(1, 1, dtype=torch.long) 
+    # קלט דוגמה קטן ופשוט
+    dummy_src = torch.randn(1, 10, input_dim)
+    dummy_lens = torch.tensor([10], dtype=torch.long)
+    dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
 
     try:
-        print("🔄 מנסה לייצא ל-ONNX (מצב CPU Safe)...")
-        onnx_file_path = out_dir / "latest_model.onnx" # שימוש ב-out_dir הנכון
+        onnx_file_path = out_dir / "latest_model.onnx"
         
+        # שימוש בפורמט הישן והיציב יותר
         torch.onnx.export(
             model, 
-            (dummy_src, dummy_lens, dummy_tgt), # העברת כל הארגומנטים כ-tuple
+            (dummy_src, dummy_lens, dummy_tgt),
             str(onnx_file_path),
             export_params=True,
-            opset_version=14, 
+            opset_version=17, # גרסה גבוהה ויציבה
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
+            # הגדרת דינמיות בצורה מפורשת יותר
             dynamic_axes={
                 'inputs': {1: 'sequence_length'},
                 'output': {1: 'sequence_length'}
@@ -236,7 +236,6 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
         print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
     except Exception as e:
         print(f"❌ ONNX export failed: {e}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
