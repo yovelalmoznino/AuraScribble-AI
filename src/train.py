@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.export
 import yaml
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -246,27 +245,21 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     try:
         # עדכון שם הקובץ ל-handwriting.onnx כפי שהוגדר
         onnx_file_path = out_dir / "handwriting.onnx"
-        print(f"🔄 מייצא ל-ONNX (handwriting.onnx) באמצעות dynamic_shapes...")
+        print(f"🔄 מייצא ל-ONNX (handwriting.onnx) באמצעות dynamic_axes...")
 
-        # הגדרת ממדים דינמיים לפי הפרוטוקול העדכני
-        d_batch = torch.export.Dim("batch_size", min=1, max=1024)
-        d_seq = torch.export.Dim("seq_len", min=1, max=2048)
-        d_tgt_len = torch.export.Dim("tgt_len", min=1, max=512)
-        
         torch.onnx.export(
             model,
             dummy_inputs,
             str(onnx_file_path),
             export_params=True,
-            opset_version=18, 
+            opset_version=16, 
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            # שימוש במפתחות התואמים לחתימת המודל: src, src_lens, tgt_inp
-            dynamic_shapes={
-                'src': {0: d_batch, 1: d_seq},
-                'src_lens': {0: d_batch},
-                'tgt_inp': {0: d_batch, 1: d_tgt_len}
+            dynamic_axes={
+                'inputs': {0: 'batch_size', 1: 'seq_len'},
+                'input_lens': {0: 'batch_size'},
+                'targets': {0: 'batch_size', 1: 'tgt_len'}
             }
         )
         print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
