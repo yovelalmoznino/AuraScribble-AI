@@ -218,11 +218,11 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
 
     try:
+        try:
         onnx_file_path = out_dir / "latest_model.onnx"
         print("🔄 מייצא ל-ONNX באמצעות dynamic_shapes (התאמה ל-PT 2026)...")
         
-
-        # אנחנו מגדירים שממד ה-sequence יכול להשתנות בין 1 ל-2048
+        # הגדרת הממד הדינמי
         d_seq = torch.export.Dim("seq_len", min=1, max=2048)
         
         torch.onnx.export(
@@ -230,13 +230,13 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
             dummy_inputs,
             str(onnx_file_path),
             export_params=True,
-            opset_version=17, 
+            opset_version=18, # עדכון ל-18 לפי המלצת המערכת
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            # החלפת dynamic_axes ב-dynamic_shapes כפי שנדרש בשגיאה
+            # התיקון הקריטי: שימוש ב-'src' במקום 'inputs'
             dynamic_shapes={
-                'inputs': {1: d_seq} 
+                'src': {1: d_seq} 
             }
         )
         print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
