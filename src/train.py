@@ -199,51 +199,49 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     }, checkpoint_out_path)
     print(f"Updated checkpoint saved to {checkpoint_out_path}")
 
-  # --- ייצוא ל-ONNX ---
-# --- ייצוא ל-ONNX ---
+ # --- ייצוא ל-ONNX ---
     print("Exporting model to ONNX...")
     model.eval()
-    model.to('cpu') # ודואים שהכל על המעבד
+    model.to('cpu') 
 
-    # 1. סידור משקולות ה-LSTM (פותר את אזהרת ה-_flat_weights)
+    # סידור משקולות ה-LSTM (קריטי למניעת אזהרות)
     for m in model.modules():
         if isinstance(m, torch.nn.LSTM):
             m.flatten_parameters()
 
     input_dim = config["input_dim"]
-    max_t = 10 # אורך זמני לבדיקה
-    
-    # 2. יצירת קלטים דוגמה
-    dummy_src = torch.randn(1, max_t, input_dim)
-    dummy_lens = torch.tensor([max_t], dtype=torch.long)
+    dummy_src = torch.randn(1, 10, input_dim)
+    dummy_lens = torch.tensor([10], dtype=torch.long)
     dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
     dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
 
     try:
         onnx_file_path = out_dir / "latest_model.onnx"
+        print("🔄 מייצא ל-ONNX באמצעות dynamic_shapes (התאמה ל-PT 2026)...")
         
-        print("🔄 מריץ JIT Trace לעקיפת Dynamo...")
-        # אנחנו "מקפיאים" את הלוגיקה של המודל לפני הייצוא
-        traced_model = torch.jit.trace(model, dummy_inputs, check_trace=False)
-
-        print("🔄 מייצא ל-ONNX (Legacy Path)...")
+        # הגדרת ממד דינמי לפי הפרוטוקול החדש
+        import torch.export
+        # אנחנו מגדירים שממד ה-sequence יכול להשתנות בין 1 ל-2048
+        d_seq = torch.export.Dim("seq_len", min=1, max=2048)
+        
         torch.onnx.export(
-            traced_model, 
+            model,
             dummy_inputs,
             str(onnx_file_path),
             export_params=True,
-            opset_version=15, # גרסה יציבה מאוד ל-RNN
+            opset_version=17, 
             do_constant_folding=True,
             input_names=['inputs', 'input_lens', 'targets'],
             output_names=['output'],
-            dynamic_axes={
-                'inputs': {1: 'sequence_length'},
-                'output': {1: 'sequence_length'}
+            # החלפת dynamic_axes ב-dynamic_shapes כפי שנדרש בשגיאה
+            dynamic_shapes={
+                'inputs': {1: d_seq} 
             }
         )
         print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
     except Exception as e:
         print(f"❌ ONNX export failed: {e}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
