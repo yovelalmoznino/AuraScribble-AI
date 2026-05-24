@@ -52,7 +52,7 @@ cd tools\handwriting-model
 - [ ] **3.** הרצת `retrain.ps1` (או שלבים ידניים למטה)
 - [ ] **4.** בדיקה: `val_cer` יורד ב-`output/training_log.jsonl`
 - [ ] **5.** בדיקה: `output/eval_report.json` — `cer_mean` סביר
-- [ ] **6.** העלאת `output/model.onnx` → Firebase `models/latest_handwriting.onnx`
+- [ ] **6.** העלאה ל-Firebase — `upload_firebase.ps1` (אוטומטי אם יש credentials)
 - [ ] **7.** (רק אם שינית vocab) עדכון `vocab.txt` ב-assets + גרסת APK
 - [ ] **8.** (אופציונלי) `copy_to_android.ps1` לגיבוי ב-APK
 - [ ] **9.** בדיקה במכשיר: פתיחת אפליקציה → המתנה ל-OTA → ניסוי OCR
@@ -139,7 +139,8 @@ pwsh ./scripts/retrain.ps1
 2. `train.py` — אימון + שמירת best לפי `val_cer`  
 3. `predict.py` — חיזוי על validation  
 4. `evaluate.py` — דוח CER  
-5. `export_onnx.py` — `output/model.onnx` + `output/model.int8.onnx`
+5. `export_onnx.py` — `output/model.onnx` + `output/model.int8.onnx`  
+6. `upload_firebase.py` — העלאה ל-Firebase (אם מוגדר service account)
 
 ### אופציה ב׳ — שלב-שלב
 
@@ -185,12 +186,54 @@ pwsh ./scripts/export_onnx.ps1
 **זה השלב העיקרי.** האפליקציה בודקת בעצמה בעת ההפעלה:
 
 - קובץ מרוחק: `models/latest_handwriting.onnx`
+- bucket: `aurascribblr.firebasestorage.app`
 - מטמון מקומי: `handwriting_ota.onnx`
-- קוד: `OnnxHandwritingRecognizer.checkAndDownloadModelUpdate()`
 
-### העלאת המודל
+### העלאה אוטומטית (מומלץ)
 
-אחרי `export_onnx.ps1`, העלה את:
+#### הגדרה חד-פעמית
+
+1. [Firebase Console](https://console.firebase.google.com) → Project **aurascribblr**  
+2. ⚙ Project Settings → **Service accounts** → **Generate new private key**  
+3. שמור את הקובץ כ:
+   ```
+   tools/handwriting-model/configs/firebase_service_account.json
+   ```
+   (אל תעלה ל-Git — הקובץ רגיש)
+
+4. ודא שלחשבון יש הרשאת **Storage Admin** (או Firebase Admin) על ה-bucket.
+
+#### הרצה
+
+```powershell
+pip install google-cloud-storage
+pwsh ./scripts/upload_firebase.ps1
+```
+
+או אחרי pipeline מלא — `retrain.ps1` מעלה **אוטומטית** אם קיים אחד מאלה:
+
+- `configs/firebase_service_account.json`
+- משתנה סביבה `GOOGLE_APPLICATION_CREDENTIALS`
+- משתנה סביבה `FIREBASE_SERVICE_ACCOUNT_JSON` (JSON מלא כ-string — מתאים ל-Kaggle Secrets)
+
+```powershell
+# דוגמה Windows — נתיב ל-SA
+$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\firebase-sa.json"
+pwsh ./scripts/retrain.ps1
+```
+
+```powershell
+python src/upload_firebase.py --local output/model.onnx --vocab configs/vocab.txt
+```
+
+הסקרipt מעלה:
+
+| קובץ מקומי | נתיב ב-Firebase |
+|------------|-----------------|
+| `output/model.onnx` | `models/latest_handwriting.onnx` |
+| `configs/vocab.txt` | `models/latest_vocab.txt` (לשימוש עתידי; האפליקציה כרגע טוענת vocab מ-assets) |
+
+### העלאה ידנית (גיבוי)
 
 ```
 output/model.onnx  →  Firebase Storage: models/latest_handwriting.onnx
@@ -295,6 +338,7 @@ tools/handwriting-model/
 | `predict.ps1` | חיזוי על val |
 | `evaluate.ps1` | דוח CER |
 | `export_onnx.ps1` | ייצוא ONNX |
+| `upload_firebase.ps1` | **העלאה אוטומטית ל-Firebase** |
 | `copy_to_android.ps1` | העתקה ל-assets (גיבוי) |
 
 ---
@@ -310,7 +354,7 @@ tools/handwriting-model/
 
 ## זרימה מקוצרת (שורה אחת לזכור)
 
-**נתונים → `retrain.ps1` → העלה `output/model.onnx` ל-Firebase → פתח אפליקציה לבדיקה.**
+**נתונים → `retrain.ps1` → (העלאה אוטומטית ל-Firebase) → פתח אפליקציה לבדיקה.**
 
 ---
 
