@@ -19,20 +19,47 @@ except ImportError as exc:
 DEFAULT_BUCKET = "aurascribblr.firebasestorage.app"
 DEFAULT_REMOTE = "models/latest_handwriting.onnx"
 
+_REQUIRED_SA_FIELDS = ("type", "project_id", "private_key", "client_email", "token_uri")
+
+
+def _validate_service_account_info(info: dict) -> None:
+    if info.get("type") != "service_account":
+        if "project_info" in info and "client" in info:
+            raise ValueError(
+                "This looks like google-services.json (Android app config), NOT a service account key.\n"
+                "Get the correct file: Firebase Console → Project Settings → Service accounts → "
+                "Generate new private key."
+            )
+        raise ValueError(
+            f"Expected type='service_account', got {info.get('type')!r}. "
+            "Use a Firebase Admin SDK private key JSON."
+        )
+    missing = [k for k in _REQUIRED_SA_FIELDS if k not in info or not info[k]]
+    if missing:
+        raise ValueError(
+            f"Service account JSON is incomplete. Missing: {', '.join(missing)}.\n"
+            "Download a fresh key: Firebase Console → Service accounts → Generate new private key."
+        )
+
 
 def _resolve_credentials(path: str | None) -> service_account.Credentials | None:
     """Load service account from file path, env var path, or inline JSON env."""
     inline = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
     if inline:
-        info = json.loads(inline)
+        info = json.loads(inline.strip())
+        _validate_service_account_info(info)
         return service_account.Credentials.from_service_account_info(info)
 
     cred_path = path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if cred_path and Path(cred_path).exists():
+        info = json.loads(Path(cred_path).read_text(encoding="utf-8"))
+        _validate_service_account_info(info)
         return service_account.Credentials.from_service_account_file(cred_path)
 
     default = Path("configs/firebase_service_account.json")
     if default.exists():
+        info = json.loads(default.read_text(encoding="utf-8"))
+        _validate_service_account_info(info)
         return service_account.Credentials.from_service_account_file(str(default))
 
     return None
