@@ -36,21 +36,24 @@ def _is_correction_json(data: object) -> bool:
 
 def _discover_json(raw_root: Path) -> list[HandwritingSample]:
     samples: list[HandwritingSample] = []
-    seen_dirs: set[Path] = set()
-    for jf in sorted(raw_root.rglob("*.json")):
-        parent = jf.parent
-        if parent in seen_dirs:
-            continue
-        try:
-            data = json.loads(jf.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not _is_correction_json(data):
-            continue
-        seen_dirs.add(parent)
-        loaded = read_firebase_corrections(parent)
+    # Firebase mirror paths (app uploads to training_data/new/{userId}/*.json)
+    for rel in (
+        "corrections",
+        "training_data/new",
+        "training_data/processed",
+        "firebase",
+    ):
+        folder = raw_root / rel
+        if folder.exists():
+            loaded = read_firebase_corrections(folder)
+            if loaded:
+                print(f"  firebase corrections: {rel} ({len(loaded)} samples)")
+                samples.extend(loaded)
+    # Any other correction-shaped JSON trees under raw/
+    if not samples:
+        loaded = read_firebase_corrections(raw_root)
         if loaded:
-            print(f"  json: {parent.relative_to(raw_root)} ({len(loaded)} samples)")
+            print(f"  firebase corrections: raw root ({len(loaded)} samples)")
             samples.extend(loaded)
     return samples
 

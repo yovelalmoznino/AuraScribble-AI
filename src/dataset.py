@@ -393,17 +393,27 @@ def _parse_iam_form_xml(path: Path) -> list[HandwritingSample]:
 
 def read_firebase_corrections(path: str | Path) -> list[HandwritingSample]:
     """
-    מתאם לקריאת הנתונים המגיעים מהאפליקציה (AuraScribble).
-    קורא קבצי JSON בפורמט שבו כל קובץ הוא דגימה אחת.
+    Reads correction JSON files uploaded by the app to Firebase Storage.
+
+    Expected object shape (see TrainingDataSyncWorker.buildPayload):
+      {"truth": "...", "prediction": "...", "points": [[x,y,t], ...], "mode": "hebrew"}
+
+    Supports nested folders, e.g. training_data/new/{userId}/*.json
+    (Firebase layout) or a flat folder of *.json after manual download.
     """
     samples: list[HandwritingSample] = []
     dir_path = Path(path)
-    
+
     if not dir_path.exists():
         print(f"[read_firebase_corrections] Directory {path} does not exist.")
         return []
 
-    for json_file in dir_path.glob("*.json"):
+    if dir_path.is_file() and dir_path.suffix.lower() == ".json":
+        json_files = [dir_path]
+    else:
+        json_files = sorted(dir_path.rglob("*.json"))
+
+    for json_file in json_files:
         try:
             with json_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
