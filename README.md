@@ -47,7 +47,7 @@ cd tools\handwriting-model
 
 ## צ'ק-ליסט — אימון מלא (העתק בכל פעם)
 
-- [ ] **1.** יש נתונים ב-`data/processed/` (לפחות `all.jsonl` או `train.jsonl`)
+- [ ] **1.** יש נתונים ב-`data/raw/` (או `data/processed/all.jsonl`) — הרץ `prepare_data.ps1` אם צריך
 - [ ] **2.** (אופציונלי) הורדת תיקונים מ-Firebase לתיקייה מקומית
 - [ ] **3.** הרצת `retrain.ps1` (או שלבים ידניים למטה)
 - [ ] **4.** בדיקה: `val_cer` יורד ב-`output/training_log.jsonl`
@@ -61,7 +61,28 @@ cd tools\handwriting-model
 
 ## שלב 1 — הכנת נתונים
 
-### פורמט קובץ JSONL
+### מ-`data/raw/` (מומלץ)
+
+שים datasets גולמיים תחת `data/raw/` והרץ:
+
+```powershell
+python src/prepare_raw.py --raw data/raw --output data/processed/all.jsonl
+# או
+pwsh ./scripts/prepare_data.ps1
+```
+
+**נתמך ב-`data/raw/`:**
+
+| תוכן | מיקום | פורמט |
+|------|--------|--------|
+| דגימות מוכנות | `**/*.jsonl` | שורת JSON לדגימה |
+| תיקוני אפליקציה | `corrections/*.json` | `truth`, `points`, `mode` |
+| מתמטיקה CROHME | `crohme/` או `**/*.inkml` | InkML |
+| אנגלית IAM | `iam/` | XML / JSONL |
+
+הסקריפט מייצר `data/processed/all.jsonl` — ואז ממשיכים ל-split ו-train.
+
+### פורמט JSONL (ידני)
 
 כל שורה = דגימה אחת:
 
