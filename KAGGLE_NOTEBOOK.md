@@ -1,240 +1,323 @@
-# Kaggle — מחברת אימון מלאה (כולל `data/raw`)
+# AuraScribble — מחברת Kaggle מלאה
 
-הפעל **GPU**. הוסף Dataset עם ה-repo (כולל `data/raw/`).
+**לפני שמתחילים:** Settings → Accelerator → **GPU**  
+**Dataset:** ZIP אחד (קוד + `data/raw`) — **לא מעלים מחדש** כשמשנים קוד  
+**Secret (אופציונלי):** `FIREBASE_SERVICE_ACCOUNT_JSON` = מפתח Service Account (לא `google-services.json`)
+
+**סדר הרצה:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → (12) → (13)
 
 ---
 
 ## תא 1 — Markdown
 
 ```markdown
-# AuraScribble — Handwriting Training (Kaggle GPU)
+# AuraScribble — Handwriting Training
 
-**Pipeline:** raw → all.jsonl → split → train → predict → evaluate → export → Firebase OTA
+- ZIP ב-input: קוד + data (לא נוגעים)
+- קוד נערך ב-working עם `%%writefile`
+- פלט: `output/` + העלאה ל-Firebase OTA
 ```
 
 ---
 
-## תא 2 — נתיבים
+## תא 2 — Setup (העתק קוד ל-working, נתיבים)
 
 ```python
 from pathlib import Path
 import os
 import sys
+import shutil
 
-REPO_INPUT = Path("/kaggle/input")
-REPO_ROOT = REPO_INPUT / "notebbok" / "tools" / "handwriting-model"
-DATA_INPUT = REPO_INPUT / "handwriting-data"  # אופציונלי
+INPUT = Path("/kaggle/input")
 
-if not REPO_ROOT.exists():
-    for train_py in REPO_INPUT.rglob("src/train.py"):
-        c = train_py.parent.parent
-        if (c / "configs" / "train.yaml").exists():
-            REPO_ROOT = c
-            print("Auto-detected:", REPO_ROOT)
-            break
+# === עדכן אם שם ה-dataset שונה ===
+INPUT_ROOT = INPUT / "notebbok" / "tools" / "handwriting-model"
+if not INPUT_ROOT.exists():
+    for cfg in INPUT.rglob("configs/train.yaml"):
+        INPUT_ROOT = cfg.parent.parent
+        print("Auto-detected:", INPUT_ROOT)
+        break
 
-assert REPO_ROOT.exists(), f"Repo not found. Inputs: {[p.name for p in REPO_INPUT.iterdir()]}"
+assert INPUT_ROOT.exists(), f"לא נמצא handwriting-model. Inputs: {[p.name for p in INPUT.iterdir()]}"
 
-os.chdir(REPO_ROOT)
-sys.path.insert(0, str(REPO_ROOT / "src"))
-print("CWD:", os.getcwd())
-print("data/raw exists:", Path("data/raw").exists())
+WORK = Path("/kaggle/working/handwriting-model")
+WORK.mkdir(parents=True, exist_ok=True)
+
+# העתק רק קוד (קטן) — לעריכה עם %%writefile
+for folder in ("src", "configs", "scripts"):
+    src_dir, dst_dir = INPUT_ROOT / folder, WORK / folder
+    if src_dir.exists():
+        if dst_dir.exists():
+            shutil.rmtree(dst_dir)
+        shutil.copytree(src_dir, dst_dir)
+        print("Copied", folder)
+
+os.chdir(WORK)
+sys.path.insert(0, str(WORK / "src"))
+
+# נתיבים — data נשארת ב-ZIP (input)
+DATA_RAW = INPUT_ROOT / "data" / "raw"
+MODELS = INPUT_ROOT / "models"
+OUTPUT = WORK / "output"
+OUTPUT.mkdir(parents=True, exist_ok=True)
+
+(WORK / "models").mkdir(exist_ok=True)
+if (MODELS / "checkpoint_best.pt").exists():
+    shutil.copy2(MODELS / "checkpoint_best.pt", WORK / "models" / "checkpoint_best.pt")
+
+print("INPUT (data):", INPUT_ROOT)
+print("WORK (code): ", WORK)
+print("data/raw:    ", DATA_RAW.exists())
+print()
+print("לעריכת קוד: תא חדש עם")
+print("%%writefile /kaggle/working/handwriting-model/src/שם_קובץ.py")
 ```
 
 ---
 
-## תא 3 — GPU + pip
+## תא 3 — (אופציונלי) עריכת קוד — `%%writefile`
+
+> הרץ תא זה **רק** כשאת משנה קובץ. הדבקי **את כל הקובץ** מתחת לשורה הראשונה.
+
+```python
+%%writefile /kaggle/working/handwriting-model/src/train.py
+
+# הדבקי כאן את כל תוכן train.py מהמחשב
+# ...
+```
+
+אחרי `%%writefile` → הרצי מחדש מתא 7.
+
+---
+
+## תא 4 — GPU + חבילות
 
 ```python
 import torch
-print("CUDA:", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
+
+print("PyTorch:", torch.__version__)
+print("CUDA:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+
 !pip install -q PyYAML tqdm onnx onnxruntime onnxscript google-cloud-storage
 ```
 
 ---
 
-## תא 4 — Firebase תיקונים + `data/raw` → all.jsonl + checkpoint
-
-**Secret:** Add-ons → Secrets → `FIREBASE_SERVICE_ACCOUNT_JSON`
+## תא 5 — נתונים: `data/raw` (ZIP) + Firebase → `all.jsonl`
 
 ```python
 from pathlib import Path
 import os
 import shutil
 
+# --- Firebase Secret (Service Account JSON) ---
 try:
     from kaggle_secrets import UserSecretsClient
     os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret(
         "FIREBASE_SERVICE_ACCOUNT_JSON"
     )
-    print("Firebase secret loaded")
+    print("Firebase secret OK")
 except Exception as e:
-    print("No Kaggle secret:", e)
+    print("Firebase secret skipped:", e)
+
+# --- הורדת תיקונים מ-Firebase ---
+FB_CORR = WORK / "data" / "firebase_corrections"
+FB_CORR.mkdir(parents=True, exist_ok=True)
 
 if os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
     !python src/download_firebase_corrections.py \
-      --local-dir data/raw/training_data/new \
-      --bucket aurascribblr.firebasestorage.app \
-      --prefix training_data/new/ \
-      --checkpoint
+        --local-dir {FB_CORR} \
+        --bucket aurascribblr.firebasestorage.app \
+        --prefix training_data/new/ \
+        --checkpoint
 else:
-    print("Skipped Firebase download — add FIREBASE_SERVICE_ACCOUNT_JSON")
+    print("No Firebase credentials — using ZIP data only")
 
-if DATA_INPUT.exists():
-    dst = Path("data/raw")
-    dst.mkdir(parents=True, exist_ok=True)
-    src = DATA_INPUT / "raw" if (DATA_INPUT / "raw").exists() else DATA_INPUT
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir():
-            shutil.copytree(item, target, dirs_exist_ok=True)
-        else:
-            shutil.copy2(item, target)
-    print("Merged DATA_INPUT into data/raw")
+# --- בניית all.jsonl מ-data/raw ב-ZIP ---
+raw_path = str(DATA_RAW)
+all_path = str(OUTPUT / "all.jsonl")
+!python src/prepare_raw.py --raw {raw_path} --output {all_path} --no-merge-existing
 
-!python src/prepare_raw.py --raw data/raw --output data/processed/all.jsonl --no-merge-existing
+# --- מיזוג תיקוני Firebase (אם הורדו) ---
+if any(FB_CORR.rglob("*.json")):
+    from dataset import read_firebase_corrections, read_manifest, write_manifest
+    merged = read_manifest(all_path) + read_firebase_corrections(FB_CORR)
+    write_manifest(all_path, merged)
+    print("Merged Firebase corrections")
 
-all_jsonl = Path("data/processed/all.jsonl")
-n = sum(1 for line in open(all_jsonl, encoding="utf-8") if line.strip())
+n = sum(1 for line in open(all_path, encoding="utf-8") if line.strip())
 print(f"all.jsonl: {n} samples")
-assert n > 0, "No samples — check Firebase secret or data/raw/"
+assert n > 0, "אין דגימות — בדקי data/raw ב-ZIP או Firebase Secret"
 
-CHECKPOINT_INPUT = REPO_INPUT / "handwriting-checkpoint"
-ckpt = Path("models/checkpoint_best.pt")
-if not ckpt.exists() and CHECKPOINT_INPUT.exists():
-    for src in [CHECKPOINT_INPUT / "checkpoint_best.pt", CHECKPOINT_INPUT / "models/checkpoint_best.pt"]:
-        if src.exists():
-            ckpt.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(src, ckpt)
-            print("Checkpoint from dataset:", src)
-print("checkpoint:", "OK" if ckpt.exists() else "from scratch")
+print("checkpoint:", (WORK / "models" / "checkpoint_best.pt").exists())
 ```
 
 ---
 
-## תא 5 — קונפיג GPU
+## תא 6 — קונפיג GPU
 
 ```python
 from pathlib import Path
 import yaml
 
 cfg = yaml.safe_load(Path("configs/train.yaml").read_text(encoding="utf-8"))
-cfg["batch_size"] = 64
+cfg["batch_size"] = 64          # 32 אם OOM
 cfg["epochs"] = 20
 cfg["learning_rate"] = 2e-5
 cfg["num_workers"] = 2
-Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
-print(cfg["epochs"], "epochs,", cfg["batch_size"], "batch")
+cfg["output_dir"] = str(OUTPUT)
+cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
+cfg["val_manifest"] = str(OUTPUT / "val.jsonl")
+cfg["model_path"] = str(WORK / "models" / "checkpoint_best.pt")
+
+Path("configs/train_kaggle.yaml").write_text(
+    yaml.dump(cfg, allow_unicode=True, default_flow_style=False),
+    encoding="utf-8",
+)
+print(f"Config: {cfg['epochs']} epochs, batch={cfg['batch_size']}")
 ```
 
 ---
 
-## תא 6 — split
+## תא 7 — split train / val
 
 ```python
-!python src/split_manifest.py --source data/processed/all.jsonl \
-  --train-out data/processed/train.jsonl --val-out data/processed/val.jsonl --val-ratio 0.1
+src = str(OUTPUT / "all.jsonl")
+train_out = str(OUTPUT / "train.jsonl")
+val_out = str(OUTPUT / "val.jsonl")
+!python src/split_manifest.py --source {src} --train-out {train_out} --val-out {val_out} --val-ratio 0.1 --seed 1337
 ```
 
 ---
 
-## תא 7 — train
+## תא 8 — אימון
 
 ```python
-from pathlib import Path
 import os
 
-extra = ""
-if Path("data/corrections").exists() and any(Path("data/corrections").glob("*.json")):
-    extra = "--corrections_dir data/corrections"
-elif Path("data/raw/corrections").exists():
-    extra = "--corrections_dir data/raw/corrections"
-
-cmd = f"python src/train.py --config configs/train_kaggle.yaml {extra}"
-print(">>>", cmd)
-assert os.system(cmd) == 0, "Training failed"
+print(">>> python src/train.py --config configs/train_kaggle.yaml")
+assert os.system("python src/train.py --config configs/train_kaggle.yaml") == 0, "Training failed"
 ```
 
 ---
 
-## תא 8 — predict
+## תא 9 — predict
 
 ```python
-!python src/predict.py --config configs/train_kaggle.yaml \
-  --checkpoint output/checkpoint_best.pt --manifest data/processed/val.jsonl \
-  --output output/predictions.jsonl
+!python src/predict.py \
+    --config configs/train_kaggle.yaml \
+    --checkpoint output/checkpoint_best.pt \
+    --manifest {OUTPUT / "val.jsonl"} \
+    --output {OUTPUT / "predictions.jsonl"}
 ```
 
 ---
 
-## תא 9 — evaluate
+## תא 10 — evaluate
 
 ```python
 from pathlib import Path
 import json
 
-!python src/evaluate.py --manifest data/processed/val.jsonl \
-  --predictions output/predictions.jsonl --report output/eval_report.json
+!python src/evaluate.py \
+    --manifest {OUTPUT / "val.jsonl"} \
+    --predictions {OUTPUT / "predictions.jsonl"} \
+    --report {OUTPUT / "eval_report.json"}
 
-print(json.dumps(json.loads(Path("output/eval_report.json").read_text()), indent=2))
+report = json.loads(Path(OUTPUT / "eval_report.json").read_text(encoding="utf-8"))
+print(json.dumps(report, indent=2, ensure_ascii=False))
 ```
 
 ---
 
-## תא 10 — export ONNX
+## תא 11 — export ONNX
 
 ```python
-!python src/export_onnx.py --config configs/train_kaggle.yaml \
-  --checkpoint output/checkpoint_best.pt --trace-time 128 --trace-tokens 96
+!python src/export_onnx.py \
+    --config configs/train_kaggle.yaml \
+    --checkpoint output/checkpoint_best.pt \
+    --trace-time 128 \
+    --trace-tokens 96
 ```
 
 ---
 
-## תא 11 — ZIP
+## תא 12 — ZIP להורדה
 
 ```python
 from pathlib import Path
-import json, zipfile, shutil
+import json
+import zipfile
+import shutil
 
 bundle = Path("/kaggle/working/handwriting_bundle")
 bundle.mkdir(exist_ok=True)
+
 for src, name in [
     ("output/model.onnx", "model.onnx"),
+    ("output/model.int8.onnx", "model.int8.onnx"),
     ("output/checkpoint_best.pt", "checkpoint_best.pt"),
     ("output/eval_report.json", "eval_report.json"),
     ("output/training_log.jsonl", "training_log.jsonl"),
+    ("output/export_summary.json", "export_summary.json"),
     ("configs/vocab.txt", "vocab.txt"),
 ]:
-    p = Path(src)
+    p = WORK / src
     if p.exists():
         shutil.copy(p, bundle / name)
         print("OK", name)
 
 zip_path = Path("/kaggle/working/handwriting_bundle.zip")
-with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
     for f in bundle.iterdir():
-        z.write(f, f.name)
-print("Download:", zip_path)
+        if f.is_file():
+            zf.write(f, f.name)
+
+print("Download from Output:", zip_path)
+
+log = OUTPUT / "training_log.jsonl"
+if log.exists():
+    print("\n=== Last epochs ===")
+    for line in log.read_text(encoding="utf-8").strip().splitlines()[-5:]:
+        r = json.loads(line)
+        print(f"epoch {r['epoch']}: loss={r.get('train_loss')} val_cer={r.get('val_cer')}")
 ```
 
 ---
 
-## תא 12 — גרף (אופציונלי)
+## תא 13 — גרף (אופציונלי)
 
 ```python
 from pathlib import Path
-import json, matplotlib.pyplot as plt
+import json
+import matplotlib.pyplot as plt
 
-rows = [json.loads(l) for l in Path("output/training_log.jsonl").read_text().splitlines() if l.strip()]
-e = [r["epoch"] for r in rows]
-plt.plot(e, [r["train_loss"] for r in rows], label="loss")
-plt.plot(e, [r.get("val_cer") for r in rows], label="val_cer")
-plt.legend(); plt.xlabel("epoch"); plt.show()
+log = OUTPUT / "training_log.jsonl"
+if not log.exists():
+    print("No training log")
+else:
+    rows = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    epochs = [r["epoch"] for r in rows]
+    losses = [r.get("train_loss") for r in rows]
+    val_cers = [r.get("val_cer") for r in rows]
+
+    fig, ax1 = plt.subplots(figsize=(9, 4))
+    ax1.plot(epochs, losses, "b-o", label="train_loss")
+    ax1.set_xlabel("epoch")
+    ax1.set_ylabel("loss", color="b")
+    ax2 = ax1.twinx()
+    ax2.plot(epochs, val_cers, "r-s", label="val_cer")
+    ax2.set_ylabel("val_cer", color="r")
+    plt.title("Training progress")
+    fig.tight_layout()
+    plt.show()
 ```
 
 ---
 
-## תא 13 — Firebase upload
+## תא 14 — העלאת מודל ל-Firebase (OTA)
 
 ```python
 import os
@@ -242,24 +325,41 @@ from pathlib import Path
 
 try:
     from kaggle_secrets import UserSecretsClient
-    os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret("FIREBASE_SERVICE_ACCOUNT_JSON")
+    os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret(
+        "FIREBASE_SERVICE_ACCOUNT_JSON"
+    )
     print("Firebase secret OK")
 except Exception as e:
     print("No secret:", e)
 
-!python src/upload_firebase.py --local output/model.onnx --vocab configs/vocab.txt \
-  --bucket aurascribblr.firebasestorage.app --remote models/latest_handwriting.onnx
+assert (WORK / "output" / "model.onnx").exists(), "Run export (cell 11) first"
+
+!python src/upload_firebase.py \
+    --local output/model.onnx \
+    --vocab configs/vocab.txt \
+    --bucket aurascribblr.firebasestorage.app \
+    --remote models/latest_handwriting.onnx
+
+print("Done. האפליקציה תוריד OTA מ-models/latest_handwriting.onnx")
 ```
 
 ---
 
-## מבנה `data/raw/` הנתמך
+## עזרה מהירה
 
-```
-data/raw/
-├── *.jsonl              # דגימות מוכנות
-├── corrections/*.json   # תיקוני אפליקציה
-├── crohme/**/*.inkml    # מתמטיקה (CROHME)
-├── iam/                 # אנגלית (IAM-OnDB)
-└── math/                # חלופה ל-crohme
-```
+| בעיה | פתרון |
+|------|--------|
+| `לא נמצא handwriting-model` | בתא 2 עדכן `INPUT_ROOT` לנתיב ב-ZIP |
+| `missing token_uri, client_email` | Secret שגוי — צריך **Service Account key**, לא `google-services.json` |
+| `0 samples` | בדקי `data/raw` ב-ZIP או Firebase Secret |
+| OOM | בתא 6: `batch_size = 32` |
+| שינית קוד | `%%writefile` בתא 3 → הרצי מחדש מתא 8 |
+| שינית data | העלי ZIP dataset מחדש (לא קשור לקוד) |
+
+## מתי מעלים ZIP מחדש?
+
+| שינוי | ZIP חדש? |
+|--------|-----------|
+| קוד Python | **לא** — `%%writefile` |
+| `data/raw` | **כן** |
+| checkpoint ב-ZIP | **כן** |
