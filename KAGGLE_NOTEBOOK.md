@@ -53,52 +53,61 @@ print("CUDA:", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch
 
 ---
 
-## תא 4 — הכנת נתונים מ-`data/raw` + checkpoint
+## תא 4 — Firebase תיקונים + `data/raw` → all.jsonl + checkpoint
+
+**Secret:** Add-ons → Secrets → `FIREBASE_SERVICE_ACCOUNT_JSON`
 
 ```python
 from pathlib import Path
+import os
 import shutil
 
-# העתק raw מ-dataset חיצוני (אם יש)
-if DATA_INPUT.exists():
-    for src in [DATA_INPUT / "raw", DATA_INPUT]:
-        if (src / "raw").exists():
-            src = src / "raw"
-        if src.name == "raw" or list(src.rglob("*.jsonl")) or list(src.rglob("*.inkml")):
-            dst = Path("data/raw")
-            dst.mkdir(parents=True, exist_ok=True)
-            for item in src.iterdir():
-                t = dst / item.name
-                if item.is_dir():
-                    shutil.copytree(item, t, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, t)
-            print("Merged external raw from", src)
-            break
+try:
+    from kaggle_secrets import UserSecretsClient
+    os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret(
+        "FIREBASE_SERVICE_ACCOUNT_JSON"
+    )
+    print("Firebase secret loaded")
+except Exception as e:
+    print("No Kaggle secret:", e)
 
-# המרה: data/raw → data/processed/all.jsonl
+if os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    !python src/download_firebase_corrections.py \
+      --local-dir data/raw/training_data/new \
+      --bucket aurascribblr.firebasestorage.app \
+      --prefix training_data/new/ \
+      --checkpoint
+else:
+    print("Skipped Firebase download — add FIREBASE_SERVICE_ACCOUNT_JSON")
+
+if DATA_INPUT.exists():
+    dst = Path("data/raw")
+    dst.mkdir(parents=True, exist_ok=True)
+    src = DATA_INPUT / "raw" if (DATA_INPUT / "raw").exists() else DATA_INPUT
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, target)
+    print("Merged DATA_INPUT into data/raw")
+
 !python src/prepare_raw.py --raw data/raw --output data/processed/all.jsonl --no-merge-existing
 
 all_jsonl = Path("data/processed/all.jsonl")
-if not all_jsonl.exists() or all_jsonl.stat().st_size == 0:
-    raise FileNotFoundError("No samples — add data under data/raw/ (jsonl, json, inkml, iam)")
+n = sum(1 for line in open(all_jsonl, encoding="utf-8") if line.strip())
+print(f"all.jsonl: {n} samples")
+assert n > 0, "No samples — check Firebase secret or data/raw/"
 
-print("all.jsonl lines:", sum(1 for _ in open(all_jsonl, encoding="utf-8") if _.strip()))
-
-# checkpoint ל-fine-tune
 CHECKPOINT_INPUT = REPO_INPUT / "handwriting-checkpoint"
 ckpt = Path("models/checkpoint_best.pt")
-ckpt.parent.mkdir(parents=True, exist_ok=True)
-if CHECKPOINT_INPUT.exists():
+if not ckpt.exists() and CHECKPOINT_INPUT.exists():
     for src in [CHECKPOINT_INPUT / "checkpoint_best.pt", CHECKPOINT_INPUT / "models/checkpoint_best.pt"]:
         if src.exists():
+            ckpt.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, ckpt)
-            print("Starter checkpoint:", src)
-            break
-elif ckpt.exists():
-    print("Using repo checkpoint")
-else:
-    print("WARNING: training from scratch")
+            print("Checkpoint from dataset:", src)
+print("checkpoint:", "OK" if ckpt.exists() else "from scratch")
 ```
 
 ---
