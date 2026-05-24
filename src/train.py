@@ -1,24 +1,28 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
+from functools import partial
 from pathlib import Path
 
 import numpy as np
 import torch
 import yaml
 from torch import nn
+from torch.nn.utils import clip_grad_norm_
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
-# ייבוא פונקציות מהדאטה-סט
 from dataset import (
     HandwritingSample,
     maybe_augment_relative_features,
     points_to_relative_features,
+    read_firebase_corrections,
     read_manifest,
-    read_firebase_corrections, 
 )
+from decode import greedy_decode
+from metrics import cer
 from model import HandwritingSeq2SeqModel
 from tokenizer import CharTokenizer
 
@@ -47,44 +51,134 @@ class HandwritingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, str, str]:
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
         sample = self.samples[idx]
-        points = sample.points
-        feats = points_to_relative_features(points)
-        
+        feats = points_to_relative_features(sample.points)
         if self.augment:
             feats = maybe_augment_relative_features(feats, True)
-
         if len(feats) > self.max_seq_len:
             feats = feats[: self.max_seq_len]
-        
+
         input_tensor = torch.tensor(feats, dtype=torch.float32)
-        target_indices = self.tokenizer.encode(sample.text)
-        if len(target_indices) > self.max_tgt_len:
-            target_indices = target_indices[: self.max_tgt_len]
-        
-        target_tensor = torch.tensor(target_indices, dtype=torch.long)
-        # החזרה של ה-mode (סוג המידע) לצורך לוגים מפורטים
-        return input_tensor, target_tensor, sample.text, sample.mode
+        token_ids = self.tokenizer.encode(sample.text, add_special_tokens=True)
+        if len(token_ids) > self.max_tgt_len:
+            token_ids = token_ids[: self.max_tgt_len]
+
+        decoder_in = torch.tensor(token_ids[:-1], dtype=torch.long)
+        targets = torch.tensor(token_ids[1:], dtype=torch.long)
+        return input_tensor, decoder_in, targets, sample.text, sample.mode
 
 
-def collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, str, str]]) -> dict[str, torch.Tensor | list[str]]:
-    inputs, targets, texts, modes = zip(*batch)
+def collate_fn(
+    batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, str, str]],
+    pad_id: int,
+) -> dict:
+    inputs, decoder_ins, targets, texts, modes = zip(*batch)
     input_lens = torch.tensor([len(x) for x in inputs], dtype=torch.long)
-    target_lens = torch.tensor([len(y) for y in targets], dtype=torch.long)
     inputs_padded = pad_sequence(inputs, batch_first=True, padding_value=0.0)
-    targets_padded = pad_sequence(targets, batch_first=True, padding_value=0)
+    decoder_padded = pad_sequence(decoder_ins, batch_first=True, padding_value=pad_id)
+    targets_padded = pad_sequence(targets, batch_first=True, padding_value=pad_id)
     return {
         "inputs": inputs_padded,
         "input_lens": input_lens,
+        "decoder_in": decoder_padded,
         "targets": targets_padded,
-        "target_lens": target_lens,
         "texts": list(texts),
         "modes": list(modes),
     }
 
 
-def train(config_path: str, corrections_dir: str | None = None, data_path: str | None = None, epochs: int | None = None) -> None:
+def _load_checkpoint_vocab(model_path: str, device: torch.device) -> tuple[dict | None, list[str] | None]:
+    path = Path(model_path)
+    if not path.exists():
+        return None, None
+    print(f"Checking checkpoint {model_path} for original vocabulary...")
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    if isinstance(checkpoint, dict) and "vocab" in checkpoint:
+        vocab = checkpoint["vocab"]
+        print(f"Success! Rescued original vocabulary with {len(vocab)} characters.")
+        return checkpoint, vocab
+    return checkpoint, None
+
+
+def _build_tokenizer(config: dict, rescued_vocab: list[str] | None) -> CharTokenizer:
+    tokenizer = CharTokenizer(config["vocab_path"])
+    if rescued_vocab:
+        tokenizer.vocab = [
+            v.replace("\n", "") for v in rescued_vocab if v.replace("\n", "") != "" or v == " "
+        ]
+        tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
+        try:
+            vocab_p = Path(config["vocab_path"])
+            vocab_p.parent.mkdir(parents=True, exist_ok=True)
+            with vocab_p.open("w", encoding="utf-8") as vf:
+                for v in tokenizer.vocab:
+                    vf.write(f"{v}\n")
+        except OSError as exc:
+            print(f"Warning: Could not write vocab file: {exc}")
+    return tokenizer
+
+
+def _evaluate_val_cer(
+    model: HandwritingSeq2SeqModel,
+    tokenizer: CharTokenizer,
+    val_samples: list[HandwritingSample],
+    device: torch.device,
+    max_seq_len: int,
+) -> tuple[float, dict[str, float]]:
+    if not val_samples:
+        return float("inf"), {}
+
+    model.eval()
+    scores: list[float] = []
+    by_mode: dict[str, list[float]] = {}
+    for sample in val_samples:
+        pred = greedy_decode(
+            model,
+            tokenizer,
+            sample.points,
+            device,
+            max_seq_len=max_seq_len,
+        )
+        score = cer(pred, sample.text)
+        scores.append(score)
+        key = sample.mode.lower()
+        by_mode.setdefault(key, []).append(score)
+
+    mean_cer = sum(scores) / max(1, len(scores))
+    mode_means = {k: sum(v) / len(v) for k, v in by_mode.items()}
+    model.train()
+    return mean_cer, mode_means
+
+
+def _save_checkpoint(
+    path: Path,
+    model: HandwritingSeq2SeqModel,
+    tokenizer: CharTokenizer,
+    config: dict,
+    val_cer: float,
+    epoch: int,
+) -> None:
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "vocab": tokenizer.vocab,
+            "config": config,
+            "val_cer": val_cer,
+            "epoch": epoch,
+        },
+        path,
+    )
+
+
+def train(
+    config_path: str,
+    corrections_dir: str | None = None,
+    data_path: str | None = None,
+    epochs: int | None = None,
+) -> None:
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
@@ -93,179 +187,154 @@ def train(config_path: str, corrections_dir: str | None = None, data_path: str |
     out_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
-    # --- טעינת מילון מה-Checkpoint ---
     model_path = config.get("model_path", "models/checkpoint_best.pt")
-    rescued_vocab = None
-    checkpoint = None
-    if Path(model_path).exists():
-        print(f"Checking checkpoint {model_path} for original vocabulary...")
-        checkpoint = torch.load(model_path, map_location=device)
-        if isinstance(checkpoint, dict) and "vocab" in checkpoint:
-            rescued_vocab = checkpoint["vocab"]
-            print(f"Success! Rescued original vocabulary with {len(rescued_vocab)} characters.")
+    checkpoint, rescued_vocab = _load_checkpoint_vocab(model_path, device)
+    tokenizer = _build_tokenizer(config, rescued_vocab)
 
-    tokenizer = CharTokenizer(config["vocab_path"])
-    
-    if rescued_vocab:
-        tokenizer.vocab = [v.replace('\n', '') for v in rescued_vocab if v.replace('\n', '') != '' or v == ' ']
-        tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
-        
-        try:
-            vocab_p = Path(config["vocab_path"])
-            vocab_p.parent.mkdir(parents=True, exist_ok=True)
-            with open(vocab_p, "w", encoding="utf-8") as vf:
-                for v in tokenizer.vocab: vf.write(f"{v}\n")
-        except Exception as e:
-            print(f"Warning: Could not write vocab file to original path: {e}. Keeping in memory.")
-    
-    # --- טעינת נתונים ---
-    print(f"Loading base training data from {config['train_manifest']}...")
+    print(f"Loading training data from {config['train_manifest']}...")
     train_samples = read_manifest(config["train_manifest"])
-
     if corrections_dir:
-        print(f"Integrating new corrections from directory: {corrections_dir}...")
-        new_samples = read_firebase_corrections(corrections_dir)
-        train_samples.extend(new_samples)
-
+        print(f"Integrating corrections from {corrections_dir}...")
+        train_samples.extend(read_firebase_corrections(corrections_dir))
     if data_path:
-        print(f"Integrating master data from file: {data_path}...")
-        master_samples = read_manifest(data_path)
-        train_samples.extend(master_samples)
+        print(f"Integrating master data from {data_path}...")
+        train_samples.extend(read_manifest(data_path))
+
+    val_manifest = config.get("val_manifest")
+    val_samples: list[HandwritingSample] = []
+    if val_manifest and Path(val_manifest).exists():
+        val_samples = read_manifest(val_manifest)
+        print(f"Loaded {len(val_samples)} validation samples from {val_manifest}")
+    else:
+        print(f"Warning: validation manifest missing or empty: {val_manifest}")
 
     train_ds = HandwritingDataset(
-        train_samples, tokenizer, config["max_seq_len"], config["max_tgt_len"], augment=True
+        train_samples,
+        tokenizer,
+        config["max_seq_len"],
+        config["max_tgt_len"],
+        augment=True,
     )
-
+    pad_id = tokenizer.pad_id
     train_loader = DataLoader(
         train_ds,
         batch_size=config["batch_size"],
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=partial(collate_fn, pad_id=pad_id),
         num_workers=config.get("num_workers", 0),
     )
-    
-    # --- בניית המודל ---
+
     model = HandwritingSeq2SeqModel(
         input_dim=config["input_dim"],
-        hidden=config["hidden_dim"], 
+        hidden=config["hidden_dim"],
         layers=config["num_layers"],
         dropout=config["dropout"],
-        vocab_size=len(tokenizer)
+        vocab_size=len(tokenizer),
     ).to(device)
 
-    # --- טעינת משקולות ---
     if checkpoint is not None:
         print(f"Loading pre-trained weights from {model_path}...")
-        state_dict = checkpoint.get("model_state") or checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or checkpoint
+        state_dict = (
+            checkpoint.get("model_state")
+            or checkpoint.get("model_state_dict")
+            or checkpoint.get("state_dict")
+            or checkpoint
+        )
         model.load_state_dict(state_dict)
         print("Weights loaded successfully!")
     else:
-        print(f"Warning: Model weights not found. Training from scratch!")
+        print("Warning: no checkpoint found. Training from scratch.")
 
-    # שימוש ב-reduction='none' כדי לאפשר חישוב סטטיסטיקה לפי סוג מידע
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, reduction='none')
-    
-    # --- הגדרת אימון ---
-    lr = config.get("learning_rate", config.get("lr", 0.0001))
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id, reduction="none")
+    lr = float(config.get("learning_rate", 2e-5))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    grad_clip = float(config.get("grad_clip_norm", 1.0))
+    correction_weight = float(config.get("correction_loss_weight", 3.0))
+    val_every = int(config.get("val_every_epochs", 1))
 
-    epochs_to_run = epochs if epochs is not None else config.get("epochs", 5)
-    print(f"Starting training loop for {epochs_to_run} epochs...")
+    epochs_to_run = epochs if epochs is not None else int(config.get("epochs", 10))
+    checkpoint_out_path = out_dir / "checkpoint_best.pt"
+    log_path = out_dir / "training_log.jsonl"
 
-    model.train()
+    best_val_cer = float("inf")
+    if isinstance(checkpoint, dict) and "val_cer" in checkpoint:
+        best_val_cer = float(checkpoint["val_cer"])
+
+    print(f"Starting training for {epochs_to_run} epochs (lr={lr}, grad_clip={grad_clip})...")
+
     for epoch in range(epochs_to_run):
+        model.train()
         total_loss = 0.0
-        # מילון למעקב אחרי ה-Loss לפי סוג (mode)
-        mode_stats = {"english": [], "math": [], "hebrew": [], "synthetic": [], "correction": []}
-        
-        for batch_idx, batch in enumerate(train_loader):
+        mode_stats: dict[str, list[float]] = {}
+
+        for batch in train_loader:
             inputs = batch["inputs"].to(device)
             input_lens = batch["input_lens"].to(device)
+            decoder_in = batch["decoder_in"].to(device)
             targets = batch["targets"].to(device)
             modes = batch["modes"]
-            
+
             optimizer.zero_grad()
-            logits = model(inputs, input_lens, targets)
-            
-            # חישוב ה-Loss הגולמי
-            raw_loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
-            # חישוב ממוצע לכל דוגמה בבאץ'
+            logits = model(inputs, input_lens, decoder_in)
+            raw_loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
             per_sample_loss = raw_loss.view(targets.size(0), -1).mean(dim=1)
-            
-            # שיוך ה-Loss לסוג המידע המתאים
+
+            weights = torch.ones_like(per_sample_loss)
             for i, mode in enumerate(modes):
-                mode_key = mode.lower()
-                if mode_key in mode_stats:
-                    mode_stats[mode_key].append(per_sample_loss[i].item())
-                else:
-                    # טיפול במקרים של שמות מצבים לא צפויים
-                    if mode_key not in mode_stats: mode_stats[mode_key] = []
-                    mode_stats[mode_key].append(per_sample_loss[i].item())
-            
-            loss = per_sample_loss.mean()
+                if mode.lower() == "correction":
+                    weights[i] = correction_weight
+
+            loss = (per_sample_loss * weights).mean()
             loss.backward()
+            clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             total_loss += loss.item()
-            
+
+            for i, mode in enumerate(modes):
+                mode_key = mode.lower()
+                mode_stats.setdefault(mode_key, []).append(per_sample_loss[i].item())
+
         avg_loss = total_loss / max(1, len(train_loader))
-        
-        # הדפסת לוג מפורט בסוף האפוק
-        log_str = f"Epoch {epoch+1}/{epochs_to_run} - Loss: {avg_loss:.4f}"
-        for m, losses in mode_stats.items():
+        log_entry: dict = {
+            "epoch": epoch + 1,
+            "train_loss": round(avg_loss, 6),
+        }
+        log_str = f"Epoch {epoch + 1}/{epochs_to_run} - Loss: {avg_loss:.4f}"
+
+        for m, losses in sorted(mode_stats.items()):
             if losses:
                 m_avg = sum(losses) / len(losses)
                 log_str += f" | {m}: {m_avg:.4f}"
+
+        if val_samples and (epoch + 1) % val_every == 0:
+            val_cer_mean, mode_cer = _evaluate_val_cer(
+                model, tokenizer, val_samples, device, config["max_seq_len"]
+            )
+            log_entry["val_cer"] = round(val_cer_mean, 6)
+            log_entry["val_mode_cer"] = {k: round(v, 6) for k, v in mode_cer.items()}
+            log_str += f" | val_cer: {val_cer_mean:.4f}"
+            for m, v in sorted(mode_cer.items()):
+                log_str += f" | val_{m}: {v:.4f}"
+
+            if val_cer_mean < best_val_cer:
+                best_val_cer = val_cer_mean
+                _save_checkpoint(checkpoint_out_path, model, tokenizer, config, best_val_cer, epoch + 1)
+                log_str += " [best]"
+                print(f"Saved new best checkpoint (val_cer={best_val_cer:.4f})")
+
         print(log_str)
+        with log_path.open("a", encoding="utf-8") as lf:
+            lf.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 
-    # --- שמירת Checkpoint מעודכן ---
-    checkpoint_out_path = out_dir / "checkpoint_best.pt"
-    torch.save({
-        "model_state": model.state_dict(),
-        "vocab": tokenizer.vocab,
-        "config": config,
-    }, checkpoint_out_path)
-    print(f"Updated checkpoint saved to {checkpoint_out_path}")
+    if not val_samples:
+        _save_checkpoint(checkpoint_out_path, model, tokenizer, config, best_val_cer, epochs_to_run)
+        print(f"Saved checkpoint to {checkpoint_out_path} (no validation set)")
 
-    # --- ייצוא ל-ONNX ---
-    print("Exporting model to ONNX...")
-    model.eval()
-    model.to('cpu') 
+    print(f"Training complete. Best val_cer={best_val_cer:.4f}. Checkpoint: {checkpoint_out_path}")
+    print("Run export_onnx.py to export for Android.")
 
-    for m in model.modules():
-        if isinstance(m, torch.nn.LSTM):
-            m.flatten_parameters()
-
-    input_dim = config["input_dim"]
-    dummy_src = torch.randn(1, 10, input_dim)
-    dummy_lens = torch.tensor([10], dtype=torch.long)
-    dummy_tgt = torch.zeros(1, 1, dtype=torch.long)
-    dummy_inputs = (dummy_src, dummy_lens, dummy_tgt)
-    
-    try:
-        # עדכון שם הקובץ ל-handwriting.onnx כפי שהוגדר
-        onnx_file_path = out_dir / "handwriting.onnx"
-        print(f"🔄 מייצא ל-ONNX (handwriting.onnx) באמצעות dynamic_axes...")
-
-        torch.onnx.export(
-            model,
-            dummy_inputs,
-            str(onnx_file_path),
-            export_params=True,
-            opset_version=16, 
-            do_constant_folding=True,
-            input_names=['inputs', 'input_lens', 'targets'],
-            output_names=['output'],
-            dynamic_axes={
-                'inputs': {0: 'batch_size', 1: 'seq_len'},
-                'input_lens': {0: 'batch_size'},
-                'targets': {0: 'batch_size', 1: 'tgt_len'}
-            }
-        )
-        print(f"✅ ONNX export successful! Saved to {onnx_file_path}")
-    except Exception as e:
-        print(f"❌ ONNX export failed: {e}")
-        
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -273,12 +342,11 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, help="Path to merged master data (.jsonl)")
     parser.add_argument("--epochs", type=int, help="Number of training epochs")
     parser.add_argument("--corrections_dir", type=str, help="Path to corrections directory")
-    
     args = parser.parse_args()
 
     train(
         config_path=args.config,
         data_path=args.data_path,
         epochs=args.epochs,
-        corrections_dir=args.corrections_dir
+        corrections_dir=args.corrections_dir,
     )

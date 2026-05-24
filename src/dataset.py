@@ -413,14 +413,17 @@ def read_firebase_corrections(path: str | Path) -> list[HandwritingSample]:
             if not raw_points and "strokesJson" in data:
                 raw_points = json.loads(data["strokesJson"])
             
-            text = data.get("correctedText", "")
-            
+            text = (data.get("truth") or data.get("correctedText") or "").strip()
+            mode = data.get("mode", "correction")
+            if not isinstance(mode, str):
+                mode = "correction"
+
             if raw_points and text:
                 samples.append(
                     HandwritingSample(
                         points=raw_points,
                         text=text,
-                        mode="correction"
+                        mode=mode,
                     )
                 )
         except Exception as e:
