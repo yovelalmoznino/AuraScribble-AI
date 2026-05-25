@@ -163,10 +163,12 @@ from pathlib import Path
 import yaml
 
 cfg = yaml.safe_load(Path("configs/train.yaml").read_text(encoding="utf-8"))
-cfg["batch_size"] = 64          # 32 אם OOM
-cfg["epochs"] = 20
+cfg["batch_size"] = 64          # 128 אם יש VRAM; 32 אם OOM
+cfg["epochs"] = 5               # Kaggle איטי — 5 סבבים + checkpoint לרוב מספיק
 cfg["learning_rate"] = 2e-5
-cfg["num_workers"] = 2
+cfg["num_workers"] = 0          # 0 ב-Kaggle לרוב יותר יציב מ-2
+cfg["val_every_epochs"] = 5     # validation רק בסבב 5 (חוסך המון זמן)
+cfg["val_max_samples"] = 150    # greedy_decode על 150 דוגמאות, לא כל val
 cfg["output_dir"] = str(OUTPUT)
 cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
 cfg["val_manifest"] = str(OUTPUT / "val.jsonl")

@@ -127,14 +127,20 @@ def _evaluate_val_cer(
     val_samples: list[HandwritingSample],
     device: torch.device,
     max_seq_len: int,
+    max_samples: int | None = None,
 ) -> tuple[float, dict[str, float]]:
     if not val_samples:
         return float("inf"), {}
 
+    subset = val_samples
+    if max_samples is not None and max_samples > 0 and len(val_samples) > max_samples:
+        rng = random.Random(1337)
+        subset = rng.sample(val_samples, max_samples)
+
     model.eval()
     scores: list[float] = []
     by_mode: dict[str, list[float]] = {}
-    for sample in val_samples:
+    for sample in subset:
         pred = greedy_decode(
             model,
             tokenizer,
@@ -253,6 +259,8 @@ def train(
     grad_clip = float(config.get("grad_clip_norm", 1.0))
     correction_weight = float(config.get("correction_loss_weight", 3.0))
     val_every = int(config.get("val_every_epochs", 1))
+    val_max_samples = config.get("val_max_samples")
+    val_max_samples = int(val_max_samples) if val_max_samples is not None else None
 
     epochs_to_run = epochs if epochs is not None else int(config.get("epochs", 10))
     checkpoint_out_path = out_dir / "checkpoint_best.pt"
@@ -310,7 +318,12 @@ def train(
 
         if val_samples and (epoch + 1) % val_every == 0:
             val_cer_mean, mode_cer = _evaluate_val_cer(
-                model, tokenizer, val_samples, device, config["max_seq_len"]
+                model,
+                tokenizer,
+                val_samples,
+                device,
+                config["max_seq_len"],
+                max_samples=val_max_samples,
             )
             log_entry["val_cer"] = round(val_cer_mean, 6)
             log_entry["val_mode_cer"] = {k: round(v, 6) for k, v in mode_cer.items()}

@@ -14,6 +14,8 @@ num_workers: 0
 grad_clip_norm: 1.0
 correction_loss_weight: 3.0
 val_every_epochs: 1
+# Cap greedy decode during training (full eval in predict.py / evaluate.py). 0 = no cap.
+val_max_samples: 200
 
 # Architecture
 input_dim: 3
