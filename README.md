@@ -21,6 +21,8 @@
 |----|------|-------------|
 | מודל ONNX (עיקרי) | Firebase `models/latest_handwriting.onnx` | **אחרי כל אימון מוצלח** |
 | תיקוני משתמשים | Firebase `training_data/new/{userId}/*.json` | נאספים מהאפליקציה אוטומטית |
+
+**Kaggle מאפס (מומלץ אחרי CER גבוה):** ראה `KAGGLE_TRAIN_FRESH.md` + `configs/train_kaggle_fresh.yaml` (`resume_from_checkpoint: false`).
 | מודל + vocab ב-APK | `app/src/main/assets/models/handwriting/` | רק לגרסת store / offline / שינוי vocab |
 
 ---

@@ -48,6 +48,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", default="output/checkpoint_best.pt")
     parser.add_argument("--manifest", default="data/processed/val.jsonl")
     parser.add_argument("--output", default="output/predictions.jsonl")
+    parser.add_argument("--limit", type=int, default=0, help="Max samples (0 = all)")
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -60,6 +61,8 @@ def main() -> None:
 
     model, tokenizer = load_model_from_checkpoint(checkpoint_path, config, device)
     samples = read_manifest(args.manifest)
+    if args.limit and args.limit > 0:
+        samples = samples[: args.limit]
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

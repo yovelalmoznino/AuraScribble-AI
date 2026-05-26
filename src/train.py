@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
+import time
 from functools import partial
 from pathlib import Path
 
@@ -103,6 +105,41 @@ def _load_checkpoint_vocab(model_path: str, device: torch.device) -> tuple[dict 
     return checkpoint, None
 
 
+def _filter_samples(
+    samples: list[HandwritingSample],
+    *,
+    min_points: int = 3,
+    min_text_len: int = 1,
+) -> list[HandwritingSample]:
+    kept: list[HandwritingSample] = []
+    dropped = 0
+    for sample in samples:
+        text = (sample.text or "").strip()
+        if len(text) < min_text_len or len(sample.points) < min_points:
+            dropped += 1
+            continue
+        feats = points_to_relative_features(sample.points)
+        if len(feats) < 2:
+            dropped += 1
+            continue
+        kept.append(sample)
+    if dropped:
+        print(f"Filtered out {dropped} invalid/short samples ({len(kept)} kept).", flush=True)
+    return kept
+
+
+def _mode_loss_weight(mode: str, config: dict) -> float:
+    weights = config.get("mode_loss_weights") or {}
+    if not isinstance(weights, dict):
+        weights = {}
+    key = (mode or "auto").lower()
+    if key in weights:
+        return float(weights[key])
+    if key == "correction":
+        return float(config.get("correction_loss_weight", 3.0))
+    return 1.0
+
+
 def _build_tokenizer(config: dict, rescued_vocab: list[str] | None) -> CharTokenizer:
     tokenizer = CharTokenizer(config["vocab_path"])
     if rescued_vocab:
@@ -195,24 +232,40 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    resume = bool(config.get("resume_from_checkpoint", True))
     model_path = config.get("model_path", "models/checkpoint_best.pt")
-    checkpoint, rescued_vocab = _load_checkpoint_vocab(model_path, device)
-    tokenizer = _build_tokenizer(config, rescued_vocab)
+    checkpoint, rescued_vocab = (None, None)
+    if resume and model_path and Path(model_path).exists():
+        checkpoint, rescued_vocab = _load_checkpoint_vocab(model_path, device)
+    elif resume and model_path:
+        print(f"No checkpoint at {model_path} — training from scratch.", flush=True)
+    else:
+        print("resume_from_checkpoint=false — training from scratch (fresh weights).", flush=True)
 
-    print(f"Loading training data from {config['train_manifest']}...")
+    tokenizer = _build_tokenizer(config, rescued_vocab if resume else None)
+
+    print(f"Loading training data from {config['train_manifest']}...", flush=True)
     train_samples = read_manifest(config["train_manifest"])
     if corrections_dir:
-        print(f"Integrating corrections from {corrections_dir}...")
+        print(f"Integrating corrections from {corrections_dir}...", flush=True)
         train_samples.extend(read_firebase_corrections(corrections_dir))
     if data_path:
-        print(f"Integrating master data from {data_path}...")
+        print(f"Integrating master data from {data_path}...", flush=True)
         train_samples.extend(read_manifest(data_path))
+
+    min_pts = int(config.get("min_points", 3))
+    min_txt = int(config.get("min_text_len", 1))
+    train_samples = _filter_samples(train_samples, min_points=min_pts, min_text_len=min_txt)
 
     val_manifest = config.get("val_manifest")
     val_samples: list[HandwritingSample] = []
     if val_manifest and Path(val_manifest).exists():
-        val_samples = read_manifest(val_manifest)
-        print(f"Loaded {len(val_samples)} validation samples from {val_manifest}")
+        val_samples = _filter_samples(
+            read_manifest(val_manifest),
+            min_points=min_pts,
+            min_text_len=min_txt,
+        )
+        print(f"Loaded {len(val_samples)} validation samples from {val_manifest}", flush=True)
     else:
         print(f"Warning: validation manifest missing or empty: {val_manifest}")
 
@@ -241,23 +294,25 @@ def train(
     ).to(device)
 
     if checkpoint is not None:
-        print(f"Loading pre-trained weights from {model_path}...")
+        print(f"Loading pre-trained weights from {model_path}...", flush=True)
         state_dict = (
             checkpoint.get("model_state")
             or checkpoint.get("model_state_dict")
             or checkpoint.get("state_dict")
-            or checkpoint
         )
-        model.load_state_dict(state_dict)
-        print("Weights loaded successfully!")
-    else:
-        print("Warning: no checkpoint found. Training from scratch.")
+        if not isinstance(state_dict, dict):
+            print("Checkpoint has no model_state — training from scratch.", flush=True)
+        else:
+            try:
+                model.load_state_dict(state_dict, strict=True)
+                print("Weights loaded successfully!", flush=True)
+            except RuntimeError as exc:
+                print(f"Checkpoint incompatible ({exc}) — training from scratch.", flush=True)
 
     criterion = nn.CrossEntropyLoss(ignore_index=pad_id, reduction="none")
     lr = float(config.get("learning_rate", 2e-5))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     grad_clip = float(config.get("grad_clip_norm", 1.0))
-    correction_weight = float(config.get("correction_loss_weight", 3.0))
     val_every = int(config.get("val_every_epochs", 1))
     val_max_samples = config.get("val_max_samples")
     val_max_samples = int(val_max_samples) if val_max_samples is not None else None
@@ -270,14 +325,22 @@ def train(
     if isinstance(checkpoint, dict) and "val_cer" in checkpoint:
         best_val_cer = float(checkpoint["val_cer"])
 
-    print(f"Starting training for {epochs_to_run} epochs (lr={lr}, grad_clip={grad_clip})...")
+    n_batches = len(train_loader)
+    log_every = int(config.get("log_every_batches", 25))
+    print(
+        f"Starting training for {epochs_to_run} epochs "
+        f"({n_batches} batches/epoch, log_every={log_every}, lr={lr})...",
+        flush=True,
+    )
 
     for epoch in range(epochs_to_run):
         model.train()
         total_loss = 0.0
         mode_stats: dict[str, list[float]] = {}
+        epoch_t0 = time.perf_counter()
+        print(f"Epoch {epoch + 1}/{epochs_to_run} started...", flush=True)
 
-        for batch in train_loader:
+        for batch_idx, batch in enumerate(train_loader):
             inputs = batch["inputs"].to(device)
             input_lens = batch["input_lens"].to(device)
             decoder_in = batch["decoder_in"].to(device)
@@ -289,11 +352,11 @@ def train(
             raw_loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
             per_sample_loss = raw_loss.view(targets.size(0), -1).mean(dim=1)
 
-            weights = torch.ones_like(per_sample_loss)
-            for i, mode in enumerate(modes):
-                if mode.lower() == "correction":
-                    weights[i] = correction_weight
-
+            weights = torch.tensor(
+                [_mode_loss_weight(m, config) for m in modes],
+                device=per_sample_loss.device,
+                dtype=per_sample_loss.dtype,
+            )
             loss = (per_sample_loss * weights).mean()
             loss.backward()
             clip_grad_norm_(model.parameters(), grad_clip)
@@ -304,12 +367,23 @@ def train(
                 mode_key = mode.lower()
                 mode_stats.setdefault(mode_key, []).append(per_sample_loss[i].item())
 
-        avg_loss = total_loss / max(1, len(train_loader))
+            if log_every > 0 and (batch_idx + 1) % log_every == 0:
+                print(
+                    f"  epoch {epoch + 1} batch {batch_idx + 1}/{n_batches} "
+                    f"loss={loss.item():.4f}",
+                    flush=True,
+                )
+
+        avg_loss = total_loss / max(1, n_batches)
+        epoch_sec = time.perf_counter() - epoch_t0
         log_entry: dict = {
             "epoch": epoch + 1,
             "train_loss": round(avg_loss, 6),
         }
-        log_str = f"Epoch {epoch + 1}/{epochs_to_run} - Loss: {avg_loss:.4f}"
+        log_str = (
+            f"Epoch {epoch + 1}/{epochs_to_run} - Loss: {avg_loss:.4f} "
+            f"({epoch_sec / 60:.1f} min)"
+        )
 
         for m, losses in sorted(mode_stats.items()):
             if losses:
@@ -337,7 +411,7 @@ def train(
                 log_str += " [best]"
                 print(f"Saved new best checkpoint (val_cer={best_val_cer:.4f})")
 
-        print(log_str)
+        print(log_str, flush=True)
         with log_path.open("a", encoding="utf-8") as lf:
             lf.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
 

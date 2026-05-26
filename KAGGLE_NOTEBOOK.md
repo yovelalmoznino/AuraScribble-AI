@@ -169,6 +169,7 @@ cfg["learning_rate"] = 2e-5
 cfg["num_workers"] = 0          # 0 ב-Kaggle לרוב יותר יציב מ-2
 cfg["val_every_epochs"] = 5     # validation רק בסבב 5 (חוסך המון זמן)
 cfg["val_max_samples"] = 150    # greedy_decode על 150 דוגמאות, לא כל val
+cfg["log_every_batches"] = 20   # הדפסה כל 20 batches (Kaggle לא נראה תקוע)
 cfg["output_dir"] = str(OUTPUT)
 cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
 cfg["val_manifest"] = str(OUTPUT / "val.jsonl")
@@ -199,8 +200,9 @@ val_out = str(OUTPUT / "val.jsonl")
 ```python
 import os
 
-print(">>> python src/train.py --config configs/train_kaggle.yaml")
-assert os.system("python src/train.py --config configs/train_kaggle.yaml") == 0, "Training failed"
+print(">>> python -u src/train.py --config configs/train_kaggle.yaml")
+# -u = unbuffered stdout (חשוב ב-Kaggle — אחרת אין פלט עד סוף epoch)
+assert os.system("python -u src/train.py --config configs/train_kaggle.yaml") == 0, "Training failed"
 ```
 
 ---
@@ -355,6 +357,8 @@ print("Done. האפליקציה תוריד OTA מ-models/latest_handwriting.onnx
 | `missing token_uri, client_email` | Secret שגוי — צריך **Service Account key**, לא `google-services.json` |
 | `0 samples` | בדקי `data/raw` ב-ZIP או Firebase Secret |
 | OOM | בתא 6: `batch_size = 32` |
+| 40+ דקות בלי פלט | Settings → **GPU**; תא 8 עם `python -u`; בדקי `Using device: cuda` |
+| תקוע בלי `Epoch 1` | גללי למעלה — אם `Using device: cpu` האימון איטי מאוד (~שעה/epoch) |
 | שינית קוד | `%%writefile` בתא 3 → הרצי מחדש מתא 8 |
 | שינית data | העלי ZIP dataset מחדש (לא קשור לקוד) |
 
