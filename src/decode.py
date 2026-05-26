@@ -15,10 +15,11 @@ def greedy_decode(
     device: torch.device,
     *,
     max_seq_len: int = 256,
-    max_steps: int = 48,
+    max_steps: int = 96,
     max_tgt_window: int = 96,
+    repetition_penalty: float = 1.25,
 ) -> str:
-    """Greedy autoregressive decode aligned with OnnxHandwritingRecognizer."""
+    """Greedy autoregressive decode (align max_steps with ONNX tgt window, default 96)."""
     feats = points_to_relative_features(points)
     if len(feats) == 0:
         return ""
@@ -42,7 +43,11 @@ def greedy_decode(
         step_idx = len(token_ids) - 1
         if step_idx >= logits.shape[1]:
             break
-        row = logits[0, step_idx]
+        row = logits[0, step_idx].clone()
+        if repetition_penalty > 1.0 and len(token_ids) >= 2:
+            for tid in set(token_ids[-3:]):
+                if 0 <= tid < row.shape[0]:
+                    row[tid] = row[tid] / repetition_penalty
         next_id = int(row.argmax().item())
         if next_id in (eos_id, pad_id):
             break

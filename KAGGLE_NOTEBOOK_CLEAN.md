@@ -372,26 +372,29 @@ report = json.loads((OUTPUT / "eval_report.json").read_text(encoding="utf-8"))
 cer_mean = float(report.get("cer_mean", 999))
 print("cer_mean on val_300:", cer_mean)
 
-if cer_mean > 0.6:
-    raise SystemExit(
-        f"cer_mean={cer_mean:.3f} — NOT uploading. Collect more Hebrew / train longer."
-    )
+upload_ok = cer_mean <= 0.6
+print("cer_by_mode:", report.get("cer_by_mode"))
+if not upload_ok:
+    print(f"SKIP Firebase upload (cer_mean={cer_mean:.3f} > 0.6). Still run cell 12+14 for local testing.")
+else:
+    print("CER OK — uploading to Firebase")
 
-try:
+if upload_ok:
+    try:
     from kaggle_secrets import UserSecretsClient
     os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret(
         "FIREBASE_SERVICE_ACCOUNT_JSON"
     )
-except Exception:
-    pass
+    except Exception:
+        pass
 
-!python src/upload_firebase.py \
-    --local output/model.onnx \
-    --vocab configs/vocab.txt \
-    --bucket aurascribblr.firebasestorage.app \
-    --remote models/latest_handwriting.onnx
+    !python src/upload_firebase.py \
+        --local output/model.onnx \
+        --vocab configs/vocab.txt \
+        --bucket aurascribblr.firebasestorage.app \
+        --remote models/latest_handwriting.onnx
 
-print("Uploaded models/latest_handwriting.onnx + vocab")
+    print("Uploaded models/latest_handwriting.onnx + vocab")
 ```
 
 ---

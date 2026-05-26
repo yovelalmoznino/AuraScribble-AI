@@ -74,6 +74,8 @@ def main() -> None:
                 sample.points,
                 device,
                 max_seq_len=config["max_seq_len"],
+                max_steps=int(config.get("decode_max_steps", 96)),
+                max_tgt_window=int(config.get("decode_max_tgt_window", 96)),
             )
             f.write(json.dumps({"id": idx, "prediction": pred}, ensure_ascii=False) + "\n")
 

@@ -27,9 +27,13 @@ def main() -> None:
     cer_scores = []
     f1_scores = []
     expr_exact_scores = []
+    by_mode: dict[str, list[float]] = {}
     for idx, sample in truth.items():
         pred = preds.get(idx, "")
-        cer_scores.append(cer(pred, sample.text))
+        score = cer(pred, sample.text)
+        cer_scores.append(score)
+        key = (sample.mode or "auto").lower()
+        by_mode.setdefault(key, []).append(score)
         if sample.mode == "math":
             f1_scores.append(math_symbol_f1(pred, sample.text))
             expr_exact_scores.append(expression_exact_match(pred, sample.text))
@@ -37,6 +41,7 @@ def main() -> None:
     report = {
         "samples": len(truth),
         "cer_mean": sum(cer_scores) / max(1, len(cer_scores)),
+        "cer_by_mode": {k: sum(v) / len(v) for k, v in sorted(by_mode.items())},
         "math_symbol_f1_mean": (sum(f1_scores) / len(f1_scores)) if f1_scores else None,
         "math_expression_exact_mean": (sum(expr_exact_scores) / len(expr_exact_scores)) if expr_exact_scores else None,
     }

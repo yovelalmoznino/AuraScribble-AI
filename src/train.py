@@ -165,6 +165,7 @@ def _evaluate_val_cer(
     device: torch.device,
     max_seq_len: int,
     max_samples: int | None = None,
+    config: dict | None = None,
 ) -> tuple[float, dict[str, float]]:
     if not val_samples:
         return float("inf"), {}
@@ -173,6 +174,10 @@ def _evaluate_val_cer(
     if max_samples is not None and max_samples > 0 and len(val_samples) > max_samples:
         rng = random.Random(1337)
         subset = rng.sample(val_samples, max_samples)
+
+    cfg = config or {}
+    decode_steps = int(cfg.get("decode_max_steps", 96))
+    decode_window = int(cfg.get("decode_max_tgt_window", 96))
 
     model.eval()
     scores: list[float] = []
@@ -184,6 +189,8 @@ def _evaluate_val_cer(
             sample.points,
             device,
             max_seq_len=max_seq_len,
+            max_steps=decode_steps,
+            max_tgt_window=decode_window,
         )
         score = cer(pred, sample.text)
         scores.append(score)
@@ -398,6 +405,7 @@ def train(
                 device,
                 config["max_seq_len"],
                 max_samples=val_max_samples,
+                config=config,
             )
             log_entry["val_cer"] = round(val_cer_mean, 6)
             log_entry["val_mode_cer"] = {k: round(v, 6) for k, v in mode_cer.items()}
