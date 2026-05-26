@@ -82,7 +82,21 @@ if torch.cuda.is_available():
 
 ---
 
-### תא 5 — נתונים
+### תא 5a — עברית סינטטית (מומלץ)
+
+```python
+!pip install -q matplotlib
+!python src/generate_synthetic_hebrew.py \
+    --output {DATA_RAW}/synthetic_hebrew/hebrew_synthetic.jsonl \
+    --sentences configs/hebrew_sentences.txt \
+    --variants 6
+```
+
+~70 משפטים × 6 ≈ **420** דגימות `mode=hebrew` (קווי מתאר מגופן + רעש — לא תחליף כתב אמיתי).
+
+---
+
+## תא 5 — נתונים
 
 ```python
 from pathlib import Path
@@ -201,6 +215,11 @@ cfg["output_dir"] = str(OUTPUT)
 cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
 cfg["val_manifest"] = str(OUTPUT / "val.jsonl")
 cfg["model_path"] = str(WORK / "models" / "checkpoint_best.pt")
+# שמור גם export/firebase ל-export_onnx (חובה)
+base = yaml.safe_load((WORK / "configs" / "train.yaml").read_text(encoding="utf-8"))
+for key in ("export", "firebase", "model"):
+    if key in base and key not in cfg:
+        cfg[key] = base[key]
 cfg_dst.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
 print("resume_from_checkpoint:", cfg.get("resume_from_checkpoint"))
 print("epochs:", cfg.get("epochs"), "batch:", cfg.get("batch_size"))

@@ -38,3 +38,11 @@ decoder_hidden: 256
 num_layers: 3
 encoder_layers: 3
 dropout: 0.15
+
+export:
+  onnx_file: output/model.onnx
+  quantized_onnx_file: output/model.int8.onnx
+firebase:
+  bucket: aurascribblr.firebasestorage.app
+  model_path: models/latest_handwriting.onnx
+  vocab_path: models/latest_vocab.txt

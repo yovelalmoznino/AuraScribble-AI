@@ -112,8 +112,9 @@ def main() -> None:
         print(f"[1/7] Loading config: {config_path}")
         cfg = _load_config(config_path)
 
-        onnx_out = Path(cfg["export"]["onnx_file"])
-        quant_out = Path(cfg["export"]["quantized_onnx_file"])
+        export_cfg = cfg.get("export") or {}
+        onnx_out = Path(export_cfg.get("onnx_file", "output/model.onnx"))
+        quant_out = Path(export_cfg.get("quantized_onnx_file", "output/model.int8.onnx"))
         onnx_out.parent.mkdir(parents=True, exist_ok=True)
         quant_out.parent.mkdir(parents=True, exist_ok=True)
         summary_path.parent.mkdir(parents=True, exist_ok=True)

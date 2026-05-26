@@ -7,3 +7,4 @@ onnxruntime>=1.20
 onnxruntime-tools>=1.7.0
 onnxscript
 google-cloud-storage>=2.14
+matplotlib>=3.8
