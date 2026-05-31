@@ -238,10 +238,10 @@ train_path = OUTPUT / "train.jsonl"
 train = read_manifest(train_path)
 priority = [s for s in train if is_priority(s)]
 rest = [s for s in train if s not in priority]
-train_boosted = rest + priority * 5
+train_boosted = rest + priority * 3
 random.Random(1337).shuffle(train_boosted)
 write_manifest(train_path, train_boosted)
-print(f"Train: {len(train_boosted)} (boosted {len(priority)} x5)")
+print(f"Train: {len(train_boosted)} (boosted {len(priority)} x3)")
 ```
 
 ---
@@ -261,9 +261,15 @@ cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
 cfg["val_manifest"] = str(OUTPUT / "val.jsonl")
 cfg["model_path"] = str(WORK / "models" / "checkpoint_best.pt")
 cfg["resume_from_checkpoint"] = False
+# Retrain overrides (see train_kaggle_rebuild.yaml in repo)
+cfg["epochs"] = 40
+cfg["learning_rate"] = 5e-5
+cfg["batch_size"] = 24
+cfg["dropout"] = 0.2
+cfg["val_max_samples"] = None
 cfg_dst.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
 print("model_type:", cfg.get("model_type"))
-print("epochs:", cfg.get("epochs"), "batch:", cfg.get("batch_size"))
+print("epochs:", cfg.get("epochs"), "batch:", cfg.get("batch_size"), "lr:", cfg.get("learning_rate"))
 ```
 
 ---

@@ -10,15 +10,15 @@ val_manifest: "output/val.jsonl"
 
 max_seq_len: 256
 max_tgt_len: 192
-batch_size: 48
-learning_rate: 0.0001
-epochs: 15
+batch_size: 24
+learning_rate: 0.00005
+epochs: 40
 seed: 1337
 num_workers: 0
 grad_clip_norm: 1.0
 
 val_every_epochs: 1
-val_max_samples: 200
+val_max_samples: null
 log_every_batches: 15
 min_points: 3
 min_text_len: 1
@@ -41,7 +41,7 @@ nhead: 8
 num_layers: 4
 encoder_layers: 4
 decoder_layers: 2
-dropout: 0.1
+dropout: 0.2
 
 export:
   onnx_file: output/model.onnx
