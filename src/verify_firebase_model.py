@@ -21,7 +21,7 @@ import yaml
 from dataset import points_to_relative_features, read_manifest
 from decode import greedy_decode
 from metrics import cer
-from model import HandwritingSeq2SeqModel
+from model_factory import build_model
 from tokenizer import CharTokenizer
 from upload_firebase import DEFAULT_BUCKET, _resolve_credentials
 
@@ -116,13 +116,7 @@ def load_pytorch_baseline(config: dict, checkpoint: Path, device: torch.device):
     if vocab:
         tokenizer.vocab = [v.replace("\n", "") for v in vocab if v.replace("\n", "") != "" or v == " "]
         tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
-    model = HandwritingSeq2SeqModel(
-        input_dim=config["input_dim"],
-        hidden=config["hidden_dim"],
-        layers=config["num_layers"],
-        dropout=config["dropout"],
-        vocab_size=len(tokenizer),
-    ).to(device)
+    model = build_model(config, len(tokenizer)).to(device)
     state = (
         checkpoint_data.get("model_state")
         or checkpoint_data.get("model_state_dict")

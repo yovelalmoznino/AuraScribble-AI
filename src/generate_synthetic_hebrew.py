@@ -159,6 +159,32 @@ def render_sentence(
     return pts
 
 
+_FINAL_FORMS = {"כ": "ך", "מ": "ם", "נ": "ן", "פ": "ף", "צ": "ץ"}
+
+
+def apply_final_hebrew_letters(text: str) -> str:
+    """Use sofit letters at end of Hebrew words (basic heuristic)."""
+    parts: list[str] = []
+    word: list[str] = []
+    for ch in text:
+        if "\u0590" <= ch <= "\u05FF":
+            word.append(ch)
+        else:
+            if word:
+                w = "".join(word)
+                if len(w) > 1 and w[-1] in _FINAL_FORMS:
+                    w = w[:-1] + _FINAL_FORMS[w[-1]]
+                parts.append(w)
+                word = []
+            parts.append(ch)
+    if word:
+        w = "".join(word)
+        if len(w) > 1 and w[-1] in _FINAL_FORMS:
+            w = w[:-1] + _FINAL_FORMS[w[-1]]
+        parts.append(w)
+    return "".join(parts)
+
+
 def load_sentences(path: Path) -> list[str]:
     lines = [
         ln.strip()
@@ -185,6 +211,7 @@ def generate_samples(
     samples: list[HandwritingSample] = []
     skipped = 0
     for text in sentences:
+        text = apply_final_hebrew_letters(text)
         for _ in range(variants):
             fs = rng.uniform(*font_size_range)
             pts = render_sentence(

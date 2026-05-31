@@ -9,7 +9,7 @@ import yaml
 
 from dataset import read_manifest
 from decode import greedy_decode
-from model import HandwritingSeq2SeqModel
+from model_factory import build_model
 from tokenizer import CharTokenizer
 
 
@@ -23,13 +23,7 @@ def load_model_from_checkpoint(checkpoint_path: Path, config: dict, device: torc
     tokenizer.vocab = [v.replace("\n", "") for v in vocab if v.replace("\n", "") != "" or v == " "]
     tokenizer.stoi = {t: i for i, t in enumerate(tokenizer.vocab)}
 
-    model = HandwritingSeq2SeqModel(
-        input_dim=config["input_dim"],
-        hidden=config["hidden_dim"],
-        layers=config["num_layers"],
-        dropout=config["dropout"],
-        vocab_size=len(tokenizer),
-    ).to(device)
+    model = build_model(config, len(tokenizer)).to(device)
     state_dict = (
         checkpoint.get("model_state")
         or checkpoint.get("model_state_dict")
@@ -74,8 +68,9 @@ def main() -> None:
                 sample.points,
                 device,
                 max_seq_len=config["max_seq_len"],
-                max_steps=int(config.get("decode_max_steps", 96)),
-                max_tgt_window=int(config.get("decode_max_tgt_window", 96)),
+                max_steps=int(config.get("decode_max_steps", 128)),
+                max_tgt_window=int(config.get("decode_max_tgt_window", 128)),
+                mode=sample.mode,
             )
             f.write(json.dumps({"id": idx, "prediction": pred}, ensure_ascii=False) + "\n")
 

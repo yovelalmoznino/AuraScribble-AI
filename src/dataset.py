@@ -58,6 +58,25 @@ def write_manifest(path: str | Path, samples: Iterable[HandwritingSample]) -> No
             )
 
 
+def subsample_points(points: list[list[float]], min_dist: float = 5.0) -> list[list[float]]:
+    """
+    Drop pen points closer than min_dist px — matches Android buildInputFeature().
+    Preserves the third coordinate (timestamp / pen flag) when present.
+    """
+    if len(points) < 2:
+        return list(points)
+    out: list[list[float]] = [list(points[0])]
+    lx, ly = float(points[0][0]), float(points[0][1])
+    for pt in points[1:]:
+        x, y = float(pt[0]), float(pt[1])
+        if np.hypot(x - lx, y - ly) > min_dist:
+            out.append(list(pt))
+            lx, ly = x, y
+    if len(out) < 2 and len(points) >= 2:
+        out.append(list(points[-1]))
+    return out
+
+
 def points_to_relative_features(points: list[list[float]]) -> np.ndarray:
     """
     Convert absolute points into relative (dx, dy, pen_state) features.
@@ -68,6 +87,7 @@ def points_to_relative_features(points: list[list[float]]) -> np.ndarray:
     """
     if not points:
         return np.array([[0.0, 0.0, 1.0]], dtype=np.float32)
+    points = subsample_points(points, min_dist=5.0)
     arr = np.asarray(points, dtype=np.float32)
     if arr.ndim != 2 or arr.shape[1] < 2:
         return np.array([[0.0, 0.0, 1.0]], dtype=np.float32)

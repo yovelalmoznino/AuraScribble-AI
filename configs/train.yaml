@@ -2,6 +2,8 @@
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "models/checkpoint_best.pt"
+model_type: "transformer"
+resume_from_checkpoint: false
 train_manifest: "data/processed/train.jsonl"
 val_manifest: "data/processed/val.jsonl"
 max_seq_len: 256
@@ -16,6 +18,9 @@ correction_loss_weight: 3.0
 val_every_epochs: 1
 # Cap greedy decode during training (full eval in predict.py / evaluate.py). 0 = no cap.
 val_max_samples: 200
+decode_max_steps: 128
+decode_max_tgt_window: 128
+max_tgt_len: 192
 
 # Architecture
 input_dim: 3

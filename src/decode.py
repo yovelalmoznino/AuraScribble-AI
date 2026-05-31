@@ -1,25 +1,24 @@
 from __future__ import annotations
 
-import numpy as np
 import torch
 
 from dataset import points_to_relative_features
-from model import HandwritingSeq2SeqModel
 from tokenizer import CharTokenizer
 
 
 def greedy_decode(
-    model: HandwritingSeq2SeqModel,
+    model: torch.nn.Module,
     tokenizer: CharTokenizer,
     points: list[list[float]],
     device: torch.device,
     *,
     max_seq_len: int = 256,
-    max_steps: int = 96,
-    max_tgt_window: int = 96,
+    max_steps: int = 128,
+    max_tgt_window: int = 128,
     repetition_penalty: float = 1.25,
+    mode: str | None = None,
 ) -> str:
-    """Greedy autoregressive decode (align max_steps with ONNX tgt window, default 96)."""
+    """Greedy autoregressive decode (align max_steps with ONNX tgt window)."""
     feats = points_to_relative_features(points)
     if len(feats) == 0:
         return ""
@@ -34,6 +33,10 @@ def greedy_decode(
     bos_id = tokenizer.bos_id
 
     token_ids = [bos_id]
+    prefix_id = tokenizer.mode_prefix_id(mode)
+    if prefix_id is not None:
+        token_ids.append(prefix_id)
+
     for _ in range(max_steps):
         window = token_ids + [pad_id] * max(0, max_tgt_window - len(token_ids))
         window = window[:max_tgt_window]
@@ -53,4 +56,5 @@ def greedy_decode(
             break
         token_ids.append(next_id)
 
-    return tokenizer.decode(token_ids[1:], rtl_aware=True)
+    start = 1 + (1 if prefix_id is not None else 0)
+    return tokenizer.decode(token_ids[start:], rtl_aware=True, mode=mode)

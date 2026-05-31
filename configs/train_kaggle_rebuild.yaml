@@ -1,0 +1,59 @@
+# Kaggle rebuild — Transformer from scratch, mixed Hebrew/English/Math + LaTeX
+output_dir: "output"
+vocab_path: "configs/vocab.txt"
+model_path: "models/checkpoint_best.pt"
+resume_from_checkpoint: false
+model_type: "transformer"
+
+train_manifest: "output/train.jsonl"
+val_manifest: "output/val.jsonl"
+
+max_seq_len: 256
+max_tgt_len: 192
+batch_size: 48
+learning_rate: 0.0001
+epochs: 15
+seed: 1337
+num_workers: 0
+grad_clip_norm: 1.0
+
+val_every_epochs: 1
+val_max_samples: 200
+log_every_batches: 15
+min_points: 3
+min_text_len: 1
+decode_max_steps: 128
+decode_max_tgt_window: 128
+
+mode_loss_weights:
+  hebrew: 4.0
+  mixed: 4.0
+  correction: 5.0
+  english: 1.0
+  math: 3.0
+  text: 2.0
+  auto: 1.0
+
+input_dim: 3
+hidden_dim: 256
+d_model: 256
+nhead: 8
+num_layers: 4
+encoder_layers: 4
+decoder_layers: 2
+dropout: 0.1
+
+export:
+  onnx_file: output/model.onnx
+  quantized_onnx_file: output/model.int8.onnx
+firebase:
+  bucket: aurascribblr.firebasestorage.app
+  model_path: models/latest_handwriting.onnx
+  vocab_path: models/latest_vocab.txt
+
+model:
+  input_dim: 3
+  encoder_hidden: 256
+  encoder_layers: 4
+  decoder_hidden: 256
+  dropout: 0.1

@@ -10,7 +10,7 @@ import torch
 import yaml
 from onnxruntime.quantization import QuantType, quantize_dynamic
 
-from model import HandwritingSeq2SeqModel
+from model_factory import build_model
 
 torch._dynamo.config.suppress_errors = True
 
@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument(
         "--trace-tokens",
         type=int,
-        default=96,
+        default=128,
         help="Dummy target token length used for tracing/export decoder window.",
     )
     parser.add_argument(
@@ -131,13 +131,7 @@ def main() -> None:
         vocab_size = len(vocab)
         print(f"      Vocab size from checkpoint: {vocab_size}")
 
-        model = HandwritingSeq2SeqModel(
-            input_dim=int(cfg["model"]["input_dim"]),
-            hidden=int(cfg["model"]["encoder_hidden"]),
-            layers=int(cfg["model"]["encoder_layers"]),
-            dropout=float(cfg["model"]["dropout"]),
-            vocab_size=vocab_size,
-        )
+        model = build_model(cfg, vocab_size)
         model.load_state_dict(model_state, strict=True)
         model.eval()
         print("[4/7] Model initialized and checkpoint weights loaded.")

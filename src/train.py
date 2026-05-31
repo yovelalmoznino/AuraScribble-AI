@@ -25,7 +25,7 @@ from dataset import (
 )
 from decode import greedy_decode
 from metrics import cer
-from model import HandwritingSeq2SeqModel
+from model_factory import build_model
 from tokenizer import CharTokenizer
 
 
@@ -64,7 +64,12 @@ class HandwritingDataset(Dataset):
             feats = feats[: self.max_seq_len]
 
         input_tensor = torch.tensor(feats, dtype=torch.float32)
-        token_ids = self.tokenizer.encode(sample.text, add_special_tokens=True)
+        token_ids = self.tokenizer.encode(
+            sample.text,
+            add_special_tokens=True,
+            mode=sample.mode,
+            add_mode_prefix=bool(self.tokenizer.mode_prefix_id(sample.mode) is not None),
+        )
         if len(token_ids) > self.max_tgt_len:
             token_ids = token_ids[: self.max_tgt_len]
 
@@ -159,7 +164,7 @@ def _build_tokenizer(config: dict, rescued_vocab: list[str] | None) -> CharToken
 
 
 def _evaluate_val_cer(
-    model: HandwritingSeq2SeqModel,
+    model: torch.nn.Module,
     tokenizer: CharTokenizer,
     val_samples: list[HandwritingSample],
     device: torch.device,
@@ -176,8 +181,8 @@ def _evaluate_val_cer(
         subset = rng.sample(val_samples, max_samples)
 
     cfg = config or {}
-    decode_steps = int(cfg.get("decode_max_steps", 96))
-    decode_window = int(cfg.get("decode_max_tgt_window", 96))
+    decode_steps = int(cfg.get("decode_max_steps", 128))
+    decode_window = int(cfg.get("decode_max_tgt_window", 128))
 
     model.eval()
     scores: list[float] = []
@@ -191,6 +196,7 @@ def _evaluate_val_cer(
             max_seq_len=max_seq_len,
             max_steps=decode_steps,
             max_tgt_window=decode_window,
+            mode=sample.mode,
         )
         score = cer(pred, sample.text)
         scores.append(score)
@@ -205,7 +211,7 @@ def _evaluate_val_cer(
 
 def _save_checkpoint(
     path: Path,
-    model: HandwritingSeq2SeqModel,
+    model: torch.nn.Module,
     tokenizer: CharTokenizer,
     config: dict,
     val_cer: float,
@@ -292,13 +298,7 @@ def train(
         num_workers=config.get("num_workers", 0),
     )
 
-    model = HandwritingSeq2SeqModel(
-        input_dim=config["input_dim"],
-        hidden=config["hidden_dim"],
-        layers=config["num_layers"],
-        dropout=config["dropout"],
-        vocab_size=len(tokenizer),
-    ).to(device)
+    model = build_model(config, len(tokenizer)).to(device)
 
     if checkpoint is not None:
         print(f"Loading pre-trained weights from {model_path}...", flush=True)
@@ -320,6 +320,8 @@ def train(
     lr = float(config.get("learning_rate", 2e-5))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     grad_clip = float(config.get("grad_clip_norm", 1.0))
+    use_amp = bool(config.get("use_amp", device.type == "cuda"))
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     val_every = int(config.get("val_every_epochs", 1))
     val_max_samples = config.get("val_max_samples")
     val_max_samples = int(val_max_samples) if val_max_samples is not None else None
@@ -354,20 +356,22 @@ def train(
             targets = batch["targets"].to(device)
             modes = batch["modes"]
 
-            optimizer.zero_grad()
-            logits = model(inputs, input_lens, decoder_in)
-            raw_loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-            per_sample_loss = raw_loss.view(targets.size(0), -1).mean(dim=1)
-
-            weights = torch.tensor(
-                [_mode_loss_weight(m, config) for m in modes],
-                device=per_sample_loss.device,
-                dtype=per_sample_loss.dtype,
-            )
-            loss = (per_sample_loss * weights).mean()
-            loss.backward()
+            optimizer.zero_grad(set_to_none=True)
+            with torch.autocast(device.type, enabled=use_amp):
+                logits = model(inputs, input_lens, decoder_in)
+                raw_loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+                per_sample_loss = raw_loss.view(targets.size(0), -1).mean(dim=1)
+                weights = torch.tensor(
+                    [_mode_loss_weight(m, config) for m in modes],
+                    device=per_sample_loss.device,
+                    dtype=per_sample_loss.dtype,
+                )
+                loss = (per_sample_loss * weights).mean()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             total_loss += loss.item()
 
             for i, mode in enumerate(modes):
