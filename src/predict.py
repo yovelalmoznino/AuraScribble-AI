@@ -70,6 +70,7 @@ def main() -> None:
                 max_seq_len=config["max_seq_len"],
                 max_steps=int(config.get("decode_max_steps", 128)),
                 max_tgt_window=int(config.get("decode_max_tgt_window", 128)),
+                repetition_penalty=float(config.get("decode_repetition_penalty", 2.0)),
                 mode=sample.mode,
             )
             f.write(json.dumps({"id": idx, "prediction": pred}, ensure_ascii=False) + "\n")

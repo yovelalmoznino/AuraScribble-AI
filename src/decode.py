@@ -15,7 +15,8 @@ def greedy_decode(
     max_seq_len: int = 256,
     max_steps: int = 128,
     max_tgt_window: int = 128,
-    repetition_penalty: float = 1.25,
+    repetition_penalty: float = 2.0,
+    no_repeat_window: int = 12,
     mode: str | None = None,
 ) -> str:
     """Greedy autoregressive decode (align max_steps with ONNX tgt window)."""
@@ -48,9 +49,15 @@ def greedy_decode(
             break
         row = logits[0, step_idx].clone()
         if repetition_penalty > 1.0 and len(token_ids) >= 2:
-            for tid in set(token_ids[-3:]):
+            recent = token_ids[-no_repeat_window:]
+            for tid in set(recent):
                 if 0 <= tid < row.shape[0]:
-                    row[tid] = row[tid] / repetition_penalty
+                    count = recent.count(tid)
+                    row[tid] = row[tid] / (repetition_penalty**count)
+        if len(token_ids) >= 4 and len(set(token_ids[-4:])) == 1:
+            stuck = token_ids[-1]
+            if 0 <= stuck < row.shape[0]:
+                row[stuck] = row[stuck] / max(repetition_penalty**3, 8.0)
         next_id = int(row.argmax().item())
         if next_id in (eos_id, pad_id):
             break

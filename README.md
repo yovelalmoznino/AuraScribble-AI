@@ -47,6 +47,17 @@ cd tools\handwriting-model
 
 ---
 
+## Kaggle v3 (מומלץ אחרי ריצה שנכשלה)
+
+ראה [`KAGGLE_NOTEBOOK_REBUILD.md`](KAGGLE_NOTEBOOK_REBUILD.md) — curriculum (קצר→מלא), early stopping, oversample ×2, config `train_kaggle_v3.yaml`.
+
+```powershell
+cd tools\handwriting-model
+python src\pack_kaggle_zip.py --output handwriting_training_bundle.zip
+```
+
+---
+
 ## צ'ק-ליסט — אימון מלא (העתק בכל פעם)
 
 - [ ] **1.** יש נתונים ב-`data/raw/` (או `data/processed/all.jsonl`) — הרץ `prepare_data.ps1` אם צריך

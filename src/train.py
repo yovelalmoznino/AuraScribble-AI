@@ -183,6 +183,7 @@ def _evaluate_val_cer(
     cfg = config or {}
     decode_steps = int(cfg.get("decode_max_steps", 128))
     decode_window = int(cfg.get("decode_max_tgt_window", 128))
+    repetition_penalty = float(cfg.get("decode_repetition_penalty", 2.0))
 
     model.eval()
     scores: list[float] = []
@@ -196,6 +197,7 @@ def _evaluate_val_cer(
             max_seq_len=max_seq_len,
             max_steps=decode_steps,
             max_tgt_window=decode_window,
+            repetition_penalty=repetition_penalty,
             mode=sample.mode,
         )
         score = cer(pred, sample.text)
@@ -316,9 +318,15 @@ def train(
             except RuntimeError as exc:
                 print(f"Checkpoint incompatible ({exc}) — training from scratch.", flush=True)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=pad_id, reduction="none")
+    label_smoothing = float(config.get("label_smoothing", 0.0))
+    criterion = nn.CrossEntropyLoss(
+        ignore_index=pad_id,
+        reduction="none",
+        label_smoothing=label_smoothing,
+    )
     lr = float(config.get("learning_rate", 2e-5))
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    weight_decay = float(config.get("weight_decay", 0.0))
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     grad_clip = float(config.get("grad_clip_norm", 1.0))
     use_amp = bool(config.get("use_amp", device.type == "cuda"))
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -329,6 +337,8 @@ def train(
     epochs_to_run = epochs if epochs is not None else int(config.get("epochs", 10))
     checkpoint_out_path = out_dir / "checkpoint_best.pt"
     log_path = out_dir / "training_log.jsonl"
+    early_stop_patience = int(config.get("early_stop_patience", 0))
+    early_stop_min_delta = float(config.get("early_stop_min_delta", 0.0))
 
     best_val_cer = float("inf")
     if isinstance(checkpoint, dict) and "val_cer" in checkpoint:
@@ -336,9 +346,11 @@ def train(
 
     n_batches = len(train_loader)
     log_every = int(config.get("log_every_batches", 25))
+    epochs_without_improve = 0
     print(
         f"Starting training for {epochs_to_run} epochs "
-        f"({n_batches} batches/epoch, log_every={log_every}, lr={lr})...",
+        f"({n_batches} batches/epoch, log_every={log_every}, lr={lr}, "
+        f"weight_decay={weight_decay}, early_stop_patience={early_stop_patience})...",
         flush=True,
     )
 
@@ -417,15 +429,33 @@ def train(
             for m, v in sorted(mode_cer.items()):
                 log_str += f" | val_{m}: {v:.4f}"
 
-            if val_cer_mean < best_val_cer:
+            improved = val_cer_mean < (best_val_cer - early_stop_min_delta)
+            if improved:
                 best_val_cer = val_cer_mean
+                epochs_without_improve = 0
                 _save_checkpoint(checkpoint_out_path, model, tokenizer, config, best_val_cer, epoch + 1)
                 log_str += " [best]"
                 print(f"Saved new best checkpoint (val_cer={best_val_cer:.4f})")
+            else:
+                epochs_without_improve += 1
+                log_str += f" (no_improve {epochs_without_improve}/{early_stop_patience})"
 
         print(log_str, flush=True)
         with log_path.open("a", encoding="utf-8") as lf:
             lf.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+        if (
+            early_stop_patience > 0
+            and val_samples
+            and (epoch + 1) % val_every == 0
+            and epochs_without_improve >= early_stop_patience
+        ):
+            print(
+                f"Early stopping: val_cer did not improve for {early_stop_patience} epochs "
+                f"(best={best_val_cer:.4f}).",
+                flush=True,
+            )
+            break
 
     if not val_samples:
         _save_checkpoint(checkpoint_out_path, model, tokenizer, config, best_val_cer, epochs_to_run)

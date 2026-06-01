@@ -1,22 +1,29 @@
-# AuraScribble — Kaggle Rebuild Notebook (Transformer + Mixed + LaTeX)
+# AuraScribble — Kaggle Notebook v3 (Rebuild)
 
-Copy each cell into a **new** Kaggle notebook. Order: **1 → 16**.
+Copy each cell into a **new** Kaggle notebook. Order: **1 → 17**.
+
+**v3 changes (vs failed 40-epoch run):**
+- Curriculum: **short lines → full train** (two phases)
+- Oversample **×2** (not ×3/×5) + extra **english/text** boost
+- **Early stopping** (6 epochs without val_cer improvement)
+- `val_max_samples: 300` (faster validation)
+- Stronger **decode anti-repetition** (fixes `the the the`)
+- Higher **text/english** loss weight, lower hebrew/mixed
 
 ## Kaggle settings
 
 | Setting | Value |
 |---------|--------|
 | Accelerator | **GPU T4 x1** |
-| Dataset | Upload `handwriting_training_bundle.zip` |
+| Dataset | Upload fresh `handwriting_training_bundle.zip` from repo |
 | Secret (optional) | `FIREBASE_SERVICE_ACCOUNT_JSON` |
 
 ## ZIP layout
 
 ```
 handwriting-model/
-  src/
-  configs/          # vocab.txt, train_kaggle_rebuild.yaml, hebrew_sentences.txt
-  scripts/
+  src/              # must include model_transformer.py (parallel decoder forward)
+  configs/          # train_kaggle_v3.yaml, train_kaggle_rebuild.yaml, vocab.txt
   data/raw/         # iam/, crohme/, optional hhd/
 ```
 
@@ -27,10 +34,10 @@ handwriting-model/
 ## Cell 1 — Markdown
 
 ```markdown
-# AuraScribble handwriting rebuild
-- StrokeTransformer from scratch
-- Hebrew (final letters) + English (case) + Math LaTeX + **mixed**
-- Upload to Firebase if val CER is good
+# AuraScribble handwriting v3
+- Curriculum: short lines → full IAM/hebrew/math
+- Early stopping on val_cer
+- Upload to Firebase only if eval CER ≤ 0.35
 ```
 
 ---
@@ -43,12 +50,11 @@ import os, sys, shutil
 
 INPUT = Path("/kaggle/input")
 INPUT_ROOT = None
-for cfg in INPUT.rglob("configs/train_kaggle_rebuild.yaml"):
-    INPUT_ROOT = cfg.parent.parent
-    break
-if INPUT_ROOT is None:
-    for cfg in INPUT.rglob("configs/train.yaml"):
+for name in ("configs/train_kaggle_v3.yaml", "configs/train_kaggle_rebuild.yaml", "configs/train.yaml"):
+    for cfg in INPUT.rglob(name):
         INPUT_ROOT = cfg.parent.parent
+        break
+    if INPUT_ROOT:
         break
 assert INPUT_ROOT, f"handwriting-model not found under {list(INPUT.iterdir())}"
 
@@ -74,136 +80,24 @@ if input_raw.exists():
             continue
         if item.is_dir():
             shutil.copytree(item, dest)
-            print("Copied data/raw/", item.name)
         else:
             shutil.copy2(item, dest)
-            print("Copied data/raw/", item.name)
+        print("Copied data/raw/", item.name)
 
 OUTPUT = WORK / "output"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 (WORK / "models").mkdir(exist_ok=True)
 print("INPUT:", INPUT_ROOT)
-print("data/raw:", DATA_RAW.exists())
-print("FRESH — no checkpoint from ZIP")
+print("v3 config:", (WORK / "configs/train_kaggle_v3.yaml").exists())
 ```
 
 ---
 
-## Cell 3 — GPU + packages
+## Cells 3–8
 
-```python
-import torch
-print("CUDA:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("GPU:", torch.cuda.get_device_name(0))
-!pip install -q PyYAML tqdm onnx onnxruntime onnxscript google-cloud-storage matplotlib pillow scikit-image
-```
+Same as before: GPU packages, HHD, synthetic Hebrew, synthetic mixed, prepare_raw, build_vocab, split train/val.
 
----
-
-## Cell 4 — HHD convert (auto-download if missing)
-
-```python
-from pathlib import Path
-
-hhd = DATA_RAW / "hhd"
-hhd.mkdir(parents=True, exist_ok=True)
-strokes_jsonl = DATA_RAW / "hhd" / "hhd_strokes.jsonl"
-
-if not any(hhd.rglob("*.png")) and not any(hhd.rglob("*.jpg")) and not any(hhd.rglob("*.parquet")):
-    print("No local HHD — downloading from HuggingFace (~40 MB)...")
-    !pip install -q huggingface_hub datasets pyarrow
-    from huggingface_hub import snapshot_download
-    snapshot_download(
-        repo_id="sivan22/hebrew-handwritten-dataset",
-        repo_type="dataset",
-        local_dir=str(hhd),
-    )
-    print("Downloaded HHD to", hhd)
-
-if any(hhd.rglob("*.parquet")) or any(hhd.rglob("*.png")) or any(hhd.rglob("*.jpg")):
-    !pip install -q datasets pyarrow
-    !python src/convert_hhd_to_jsonl.py --input {hhd} --output {strokes_jsonl}
-    import json
-    from pathlib import Path
-    n = sum(1 for _ in open(strokes_jsonl, encoding="utf-8")) if Path(strokes_jsonl).exists() else 0
-    print(f"HHD strokes JSONL lines: {n}")
-else:
-    print("Skip HHD — no parquet/images found after download")
-```
-
----
-
-## Cell 5 — Synthetic Hebrew (final letters)
-
-```python
-!python src/generate_synthetic_hebrew.py \
-    --output {DATA_RAW}/synthetic_hebrew/hebrew_synthetic.jsonl \
-    --sentences configs/hebrew_sentences.txt \
-    --variants 10
-```
-
----
-
-## Cell 6 — Synthetic mixed (he+en+math)
-
-```python
-!python src/generate_synthetic_mixed.py \
-    --output {DATA_RAW}/synthetic_mixed/mixed_synthetic.jsonl \
-    --per-template 10
-```
-
----
-
-## Cell 7 — Prepare data + Firebase corrections
-
-```python
-from pathlib import Path
-import os
-from collections import Counter
-from dataset import read_manifest, read_firebase_corrections, write_manifest
-
-try:
-    from kaggle_secrets import UserSecretsClient
-    os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret(
-        "FIREBASE_SERVICE_ACCOUNT_JSON"
-    )
-    print("Firebase secret OK")
-except Exception as e:
-    print("Firebase secret skipped:", e)
-
-FB_CORR = WORK / "data" / "firebase_corrections"
-FB_CORR.mkdir(parents=True, exist_ok=True)
-if os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON"):
-    !python src/download_firebase_corrections.py \
-        --local-dir {FB_CORR} \
-        --bucket aurascribblr.firebasestorage.app \
-        --prefix training_data/new/
-else:
-    print("No Firebase — ZIP only")
-
-all_path = OUTPUT / "all.jsonl"
-!python src/prepare_raw.py --raw {DATA_RAW} --output {all_path} --no-merge-existing
-
-if any(FB_CORR.rglob("*.json")):
-    merged = read_manifest(all_path) + read_firebase_corrections(FB_CORR)
-    write_manifest(all_path, merged)
-
-samples = read_manifest(all_path)
-modes = Counter((s.mode or "auto").lower() for s in samples)
-print(f"Total: {len(samples)}")
-for k, v in modes.most_common():
-    print(f"  {k}: {v}")
-assert len(samples) > 200, "Too few samples — add iam/ + crohme/ to ZIP"
-```
-
----
-
-## Cell 8 — Build vocab
-
-```python
-!python src/build_vocab.py --manifest {OUTPUT / "all.jsonl"} --output configs/vocab.txt
-```
+(Copy cells 3–9 from your previous notebook if unchanged.)
 
 ---
 
@@ -220,7 +114,7 @@ assert len(samples) > 200, "Too few samples — add iam/ + crohme/ to ZIP"
 
 ---
 
-## Cell 10 — Oversample mixed + Hebrew + corrections
+## Cell 10 — Oversample (×2) + English boost
 
 ```python
 import random
@@ -234,59 +128,124 @@ def is_priority(s: HandwritingSample) -> bool:
         return "$" in s.text or any("a" <= c.lower() <= "z" for c in s.text if c.isascii())
     return False
 
+def is_long_english(s: HandwritingSample) -> bool:
+    m = (s.mode or "").lower()
+    return m in ("english", "text") and len(s.text.strip()) > 12
+
 train_path = OUTPUT / "train.jsonl"
 train = read_manifest(train_path)
 priority = [s for s in train if is_priority(s)]
-rest = [s for s in train if s not in priority]
-train_boosted = rest + priority * 3
+english_long = [s for s in train if is_long_english(s)]
+rest = [s for s in train if s not in priority and s not in english_long]
+train_boosted = rest + priority * 2 + english_long * 2
 random.Random(1337).shuffle(train_boosted)
 write_manifest(train_path, train_boosted)
-print(f"Train: {len(train_boosted)} (boosted {len(priority)} x3)")
+print(f"Train: {len(train_boosted)} | priority x2: {len(priority)} | english/text x2: {len(english_long)}")
 ```
 
 ---
 
-## Cell 11 — Config
+## Cell 10b — Curriculum: short-line manifest
+
+```python
+!python src/build_curriculum_manifest.py \
+    --train {OUTPUT / "train.jsonl"} \
+    --short-out {OUTPUT / "train_short.jsonl"} \
+    --max-chars 32
+```
+
+---
+
+## Cell 11 — Base config (v3)
 
 ```python
 import shutil, yaml
 from pathlib import Path
 
-cfg_src = WORK / "configs" / "train_kaggle_rebuild.yaml"
+for src_name in ("train_kaggle_v3.yaml", "train_kaggle_rebuild.yaml"):
+    src = WORK / "configs" / src_name
+    if src.exists():
+        cfg_src = src
+        break
+else:
+    raise FileNotFoundError("Missing train_kaggle_v3.yaml in ZIP")
+
 cfg_dst = WORK / "configs" / "train_kaggle.yaml"
 shutil.copy2(cfg_src, cfg_dst)
 cfg = yaml.safe_load(cfg_dst.read_text(encoding="utf-8"))
+
 cfg["output_dir"] = str(OUTPUT)
-cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
 cfg["val_manifest"] = str(OUTPUT / "val.jsonl")
-cfg["model_path"] = str(WORK / "models" / "checkpoint_best.pt")
+cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
 cfg["resume_from_checkpoint"] = False
-# Retrain overrides (see train_kaggle_rebuild.yaml in repo)
-cfg["epochs"] = 40
+
+# v3 defaults (safe to tweak)
+cfg["epochs"] = 30
 cfg["learning_rate"] = 5e-5
 cfg["batch_size"] = 24
 cfg["dropout"] = 0.2
-cfg["val_max_samples"] = None
+cfg["weight_decay"] = 0.01
+cfg["label_smoothing"] = 0.1
+cfg["val_max_samples"] = 300
+cfg["early_stop_patience"] = 6
+cfg["early_stop_min_delta"] = 0.01
+cfg["decode_repetition_penalty"] = 2.0
+
 cfg_dst.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
-print("model_type:", cfg.get("model_type"))
-print("epochs:", cfg.get("epochs"), "batch:", cfg.get("batch_size"), "lr:", cfg.get("learning_rate"))
+print("epochs:", cfg["epochs"], "early_stop:", cfg["early_stop_patience"])
+print("val_max_samples:", cfg["val_max_samples"])
 ```
 
 ---
 
-## Cell 12 — Train (run once)
+## Cell 12 — Train phase 1 (short lines)
 
 ```python
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load(Path("configs/train_kaggle.yaml").read_text(encoding="utf-8"))
+p1 = cfg.get("curriculum_phase1") or {}
+cfg["train_manifest"] = str(OUTPUT / "train_short.jsonl")
+cfg["max_tgt_len"] = int(p1.get("max_tgt_len", 64))
+cfg["epochs"] = int(p1.get("epochs", 18))
+cfg["resume_from_checkpoint"] = False
+Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+print("Phase 1:", cfg["train_manifest"], "max_tgt_len:", cfg["max_tgt_len"], "epochs:", cfg["epochs"])
+
 import os
 rc = os.system("python -u src/train.py --config configs/train_kaggle.yaml")
-assert rc == 0, f"Training failed exit={rc}"
+assert rc == 0, f"Phase 1 failed exit={rc}"
 ```
 
 ---
 
-## Cell 13 — Sanity (mixed + math)
+## Cell 12b — Train phase 2 (full train, resume best)
 
 ```python
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load(Path("configs/train_kaggle.yaml").read_text(encoding="utf-8"))
+cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
+cfg["max_tgt_len"] = 128
+cfg["epochs"] = 30
+cfg["resume_from_checkpoint"] = True
+cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
+Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+print("Phase 2: full train, resume from checkpoint_best.pt")
+
+import os
+rc = os.system("python -u src/train.py --config configs/train_kaggle.yaml")
+assert rc == 0, f"Phase 2 failed exit={rc}"
+```
+
+---
+
+## Cell 13 — Sanity (collapse check)
+
+```python
+import random
 import torch, yaml
 from pathlib import Path
 from dataset import read_manifest
@@ -307,15 +266,40 @@ model = build_model(cfg, len(tok)).to(device)
 model.load_state_dict(ckpt["model_state"])
 model.eval()
 
-checks = [
-    s for s in read_manifest(cfg["val_manifest"])
-    if (s.mode or "").lower() in ("mixed", "math", "hebrew")
-][:12]
-for s in checks:
-    pred = greedy_decode(model, tok, s.points, device, max_seq_len=cfg["max_seq_len"], mode=s.mode)
-    print(f"[{s.mode}] truth={s.text[:60]!r}")
-    print(f"       pred ={pred[:60]!r}  cer={cer(pred, s.text):.3f}")
-    print("---")
+rep_pen = float(cfg.get("decode_repetition_penalty", 2.0))
+val = read_manifest(cfg["val_manifest"])
+random.seed(42)
+
+def collapsed(pred: str) -> bool:
+    if pred.count("the the") >= 2:
+        return True
+    if pred.count("\\times \\times") >= 2:
+        return True
+    words = pred.split()
+    if len(words) >= 6 and len(set(words)) <= 2:
+        return True
+    return False
+
+ok, bad = 0, 0
+for s in random.sample(val, min(24, len(val))):
+    pred = greedy_decode(
+        model, tok, s.points, device,
+        max_seq_len=cfg["max_seq_len"],
+        mode=s.mode,
+        repetition_penalty=rep_pen,
+    )
+    c = cer(pred, s.text)
+    tag = "COLLAPSE" if collapsed(pred) else "OK"
+    if tag == "COLLAPSE":
+        bad += 1
+    else:
+        ok += 1
+    print(f"[{tag}] [{s.mode}] CER={c:.2f}")
+    print(f"  truth: {s.text[:70]!r}")
+    print(f"  pred:  {pred[:70]!r}\n")
+
+print(f"Summary: OK={ok} COLLAPSE={bad} | checkpoint epoch={ckpt.get('epoch')} val_cer={ckpt.get('val_cer')}")
+print("Export only if bad==0 or bad<=2 AND val_cer < 0.5")
 ```
 
 ---
@@ -374,7 +358,7 @@ if cer_mean <= 0.35:
         --remote models/latest_handwriting.onnx
     print("Uploaded to Firebase")
 else:
-    print("SKIP Firebase — CER too high")
+    print("SKIP Firebase — CER too high (need <= 0.35)")
 ```
 
 ---
@@ -415,12 +399,17 @@ cd tools\handwriting-model
 python src\pack_kaggle_zip.py --output handwriting_training_bundle.zip
 ```
 
-## Quality targets
+Re-upload the ZIP to Kaggle, then paste cells into a **new** notebook.
 
-| mode | CER target |
-|------|------------|
-| english | < 0.20 |
-| hebrew | < 0.30 |
-| math | < 0.25 |
-| mixed | < 0.35 |
-| mean | < 0.30 |
+---
+
+## When to export
+
+| Check | Target |
+|-------|--------|
+| `val_cer` (best checkpoint) | **< 0.5** (ideal < 0.35) |
+| `val_text` | **< 1.0** (not ~3.0) |
+| Cell 13 `COLLAPSE` count | **0–2** max |
+| `eval_report.json` cer_mean | **≤ 0.35** for Firebase |
+
+If phase 2 early-stops with `val_cer` still > 1.0 — do **not** export; fix data (more IAM) before another run.

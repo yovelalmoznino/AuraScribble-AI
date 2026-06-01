@@ -1,4 +1,4 @@
-# Same as train_kaggle_v3.yaml (kept for older ZIPs that reference this filename)
+# Kaggle v3 — curriculum (short → full), early stop, less oversample, stronger regularization
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "output/checkpoint_best.pt"
@@ -65,6 +65,7 @@ model:
   decoder_hidden: 256
   dropout: 0.2
 
+# Phase 1 only (notebook overrides train_manifest + max_tgt_len)
 curriculum_phase1:
   train_manifest: "output/train_short.jsonl"
   max_tgt_len: 64
