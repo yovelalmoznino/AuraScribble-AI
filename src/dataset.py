@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -151,18 +152,22 @@ def load_crohme_dataset(path: str | Path) -> list[HandwritingSample]:
 
 def load_iam_online_dataset(path: str | Path) -> list[HandwritingSample]:
     """
-    Placeholder loader skeleton for IAM-OnDB (online English handwriting).
+    Loader for IAM-OnDB (online English handwriting), in priority order:
+      1) JSONL manifests already prepared (fast path)
+      2) IAM-OnDB jsonised (DeepWriting / ETH AIT) *-segmented[-nonorm].json files
+         with real pen trajectories (word_stroke) and transcriptions (word_ascii)
+      3) generic XML stroke files + sidecar text files (true Point/Stroke trajectories)
 
-    Expected output:
-      list[HandwritingSample(points=[[x,y,t],...], text="<transcript>", mode="text")]
+    The legacy IAM offline form-metadata path (cmp bounding boxes -> fake zigzag
+    pseudo-strokes) is DISABLED by default because it caused English template
+    collapse. Set env IAM_ALLOW_FAKE_BBOX=1 to re-enable it as a last resort.
+
+    Output: list[HandwritingSample(points=[[x,y,t],...], text="<transcript>", mode="english")]
     """
     root = Path(path)
     if not root.exists():
         return []
 
-    # IAM-OnDB packaging varies; this loader supports:
-    # 1) direct JSONL manifests in the folder
-    # 2) paired XML stroke files + sidecar text files
     samples: list[HandwritingSample] = []
 
     # Preferred fast path: JSONL manifests already prepared.
@@ -174,16 +179,27 @@ def load_iam_online_dataset(path: str | Path) -> list[HandwritingSample]:
     if samples:
         return samples
 
-    xml_files = sorted(root.rglob("*.xml"))
-    # Fallback path A: IAM form metadata XML with line text + cmp boxes.
-    for xml_file in xml_files:
-        form_lines = _parse_iam_form_xml(xml_file)
-        if form_lines:
-            samples.extend(form_lines)
+    # Path 2: IAM-OnDB jsonised (real online trajectories).
+    json_files = sorted(root.rglob("*-segmented-nonorm.json")) + sorted(
+        root.rglob("*-segmented.json")
+    )
+    # Dedup per record: prefer the "jsready" variant when both exist for a record.
+    by_record: dict[str, Path] = {}
+    for jf in json_files:
+        record = _iamondb_record_key(jf)
+        existing = by_record.get(record)
+        if existing is None:
+            by_record[record] = jf
+        elif "jsready" in jf.name and "jsready" not in existing.name:
+            by_record[record] = jf
+    for jf in sorted(by_record.values()):
+        samples.extend(_parse_iamondb_json(jf))
     if samples:
         return samples
 
-    # Fallback path B: generic XML stroke files and sidecar text files by stem.
+    xml_files = sorted(root.rglob("*.xml"))
+
+    # Path 3: generic XML stroke files and sidecar text files by stem.
     for xml_file in xml_files:
         points = _parse_generic_stroke_xml(xml_file)
         if not points:
@@ -191,8 +207,102 @@ def load_iam_online_dataset(path: str | Path) -> list[HandwritingSample]:
         text = _find_sidecar_text(xml_file)
         if not text:
             continue
-        samples.append(HandwritingSample(points=points, text=text, mode="text"))
+        samples.append(HandwritingSample(points=points, text=text, mode="english"))
+    if samples:
+        return samples
+
+    # Disabled fallback: IAM offline form metadata (cmp boxes -> fake strokes).
+    # Opt-in only; this is the known cause of English template collapse.
+    if os.environ.get("IAM_ALLOW_FAKE_BBOX") == "1":
+        for xml_file in xml_files:
+            form_lines = _parse_iam_form_xml(xml_file)
+            if form_lines:
+                samples.extend(form_lines)
+
     return samples
+
+
+def _iamondb_record_key(json_path: Path) -> str:
+    """
+    Map a jsonised IAM-OnDB filename to a stable record key so that the
+    'jsready' and plain variants of the same record dedup to one entry.
+
+    e.g. 'a01-020z-jsready-segmented-nonorm.json' -> 'a01-020z'
+         'c01-038z-segmented-nonorm.json'         -> 'c01-038z'
+    """
+    stem = json_path.name
+    for suffix in ("-jsready-segmented-nonorm.json", "-segmented-nonorm.json",
+                   "-jsready-segmented.json", "-segmented.json"):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return json_path.stem
+
+
+def _parse_iamondb_json(json_path: Path) -> list[HandwritingSample]:
+    """
+    Parse one IAM-OnDB jsonised (DeepWriting / ETH AIT) file into line-level samples.
+
+    Each file holds multiple line samples keyed 'sample0', 'sample1', ... . Each
+    sample provides:
+      - word_ascii:  the line transcription
+      - word_stroke: ordered points [{ "x", "y", "ts", "ev" }, ...]
+                     ev in {0: pen-down, 1: writing, 2: pen-up}
+
+    Points are emitted as [x, y, t] where t is a monotonic counter (consistent
+    with the other parsers in this module), with an extra step inserted at each
+    pen-up / pen-down boundary so multi-stroke lines keep their stroke gaps.
+    """
+    try:
+        with json_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    out: list[HandwritingSample] = []
+    for key in sorted(data.keys()):
+        if not key.startswith("sample"):
+            continue
+        sample = data.get(key)
+        if not isinstance(sample, dict):
+            continue
+        text = str(sample.get("word_ascii") or "").strip()
+        if not text:
+            continue
+        word_stroke = sample.get("word_stroke")
+        if not isinstance(word_stroke, list) or not word_stroke:
+            continue
+
+        points: list[list[float]] = []
+        t = 0.0
+        prev_ev: int | None = None
+        for pt in word_stroke:
+            if not isinstance(pt, dict):
+                continue
+            try:
+                x = float(pt["x"])
+                y = float(pt["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            try:
+                ev = int(pt.get("ev", 1))
+            except (TypeError, ValueError):
+                ev = 1
+            # Insert a pen-up gap on a new stroke (pen-down after a previous point)
+            # or right after a pen-up event.
+            if points and (ev == 0 or prev_ev == 2):
+                t += 1.0
+            points.append([x, y, t])
+            t += 1.0
+            prev_ev = ev
+
+        if not points:
+            continue
+        out.append(HandwritingSample(points=points, text=text, mode="english"))
+
+    return out
 
 
 def _parse_inkml_file(path: Path) -> HandwritingSample | None:
@@ -356,9 +466,12 @@ def _normalize_crohme_truth(text: str) -> str:
 
 def _parse_iam_form_xml(path: Path) -> list[HandwritingSample]:
     """
-    Parse IAM form XML (line-level transcripts + cmp bounding boxes) into pseudo online traces.
+    Parse IAM OFFLINE form XML (line-level transcripts + cmp bounding boxes) into
+    pseudo online traces (4-point zigzag per box).
 
-    This is a pragmatic bridge when true pen trajectories are unavailable in the raw folder.
+    WARNING: these are FAKE strokes, not real pen trajectories. They cause English
+    template collapse, so load_iam_online_dataset only calls this when the env flag
+    IAM_ALLOW_FAKE_BBOX=1 is set. Prefer real online data (IAM-OnDB jsonised).
     """
     try:
         tree = ET.parse(path)

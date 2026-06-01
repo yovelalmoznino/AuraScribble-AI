@@ -48,7 +48,7 @@ def greedy_decode(
         partial = tokenizer.decode(token_ids[start:], rtl_aware=False, mode=mode)
         if not is_template_collapse(partial, mode=mode):
             return
-        for ch in set(partial.lower() + "theand.\\frac{12}x"):
+        for ch in set(partial.lower() + "theandwanther.\\frac{12}x-{)"):
             tid = tokenizer.stoi.get(ch)
             if tid is not None and 0 <= tid < row.shape[0]:
                 row[tid] = row[tid] / _TEMPLATE_CHAR_PENALTY

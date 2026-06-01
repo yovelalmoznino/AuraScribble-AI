@@ -10,6 +10,13 @@ Copy each cell into a **new** Kaggle notebook. Order: **1 → 18**.
 - Phase 2b: **patience 12**, lr **2e-5**; Phase 2c: IAM-only, lr **1e-5**
 - Training logs **`val template_collapse`** rate each epoch
 
+**v3.2 data changes (real ink + balance):**
+- English now uses **real IAM-OnDB online strokes** (jsonised), not fake bbox zigzags
+- **Balanced, stratified split** (`--balance-modes`) replaces the manual ×2 oversample (old Cell 10 removed)
+- Synthetic Hebrew is now **centerline (skeleton), RTL, multi-font** (was mirrored font outlines)
+- **HHD** converts via skeletonization; Firebase **corrections** auto-ingested (Cells 4–5)
+- Curriculum manifests are **deduped + single-line**; export gate is now **per-mode** (Cell 13)
+
 ## Kaggle settings
 
 | Setting | Value |
@@ -93,59 +100,131 @@ print("v3 config:", (WORK / "configs/train_kaggle_v3.yaml").exists())
 
 ---
 
-## Cells 3–8
+## Cell 3 — GPU packages
 
-Same as before: GPU packages, HHD, synthetic Hebrew, synthetic mixed, prepare_raw, build_vocab, split train/val.
+```python
+# Torch is preinstalled on Kaggle GPU images. These cover data prep:
+!pip -q install pillow numpy python-bidi datasets google-cloud-storage onnx onnxruntime 2>/dev/null
+import PIL, numpy as np
+print("pillow", PIL.__version__, "numpy", np.__version__)
+```
 
-(Copy cells 3–9 from your previous notebook if unchanged.)
+`python-bidi` improves synthetic Hebrew RTL shaping (the generator falls back to a
+built-in heuristic if it is missing). `datasets` is only needed for HHD parquet.
 
 ---
 
-## Cell 9 — Split train / val
+## Cell 4 — Firebase corrections (REAL user ink — optional but best for Hebrew)
+
+```python
+import os
+# Needs the FIREBASE_SERVICE_ACCOUNT_JSON Kaggle secret.
+try:
+    from kaggle_secrets import UserSecretsClient
+    os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = UserSecretsClient().get_secret(
+        "FIREBASE_SERVICE_ACCOUNT_JSON"
+    )
+    rc = os.system(
+        "python -u src/download_firebase_corrections.py "
+        f"--local-dir {DATA_RAW / 'training_data' / 'new'} --include-processed"
+    )
+    print("corrections download rc:", rc)
+except Exception as e:
+    print("Skipping Firebase corrections (no secret / offline):", e)
+```
+
+`prepare_raw` auto-ingests every `*.json` under `data/raw/` via
+`read_firebase_corrections`, so the downloaded files need no extra conversion.
+These are the only **real** Hebrew sentences/words from the app — the highest-value
+Hebrew data you have.
+
+---
+
+## Cell 5 — HHD (real Hebrew letters → centerline strokes)
+
+```python
+import os
+# Put the HHD dataset under data/raw/hhd/ (parquet, image folders, or a .rar).
+hhd_dir = DATA_RAW / "hhd"
+if hhd_dir.exists() and any(hhd_dir.iterdir()):
+    rc = os.system(
+        "python -u src/convert_hhd_to_jsonl.py "
+        f"--input {hhd_dir} --output {hhd_dir / 'hhd_strokes.jsonl'}"
+    )
+    print("HHD convert rc:", rc)
+else:
+    print("No HHD data at", hhd_dir, "- skipping (add it as a Kaggle dataset to use).")
+```
+
+Now uses **Zhang-Suen skeletonization** (centerline), not a raster scan — so HHD
+letters look like pen strokes. Output JSONL is auto-ingested by `prepare_raw`.
+
+---
+
+## Cell 6 — Synthetic Hebrew (centerline, RTL, multi-font)
+
+```python
+import os
+rc = os.system(
+    "python -u src/generate_synthetic_hebrew.py "
+    f"--output {DATA_RAW / 'synthetic_hebrew' / 'hebrew_synthetic.jsonl'} "
+    "--sentences configs/hebrew_sentences.txt --variants 8"
+)
+assert rc == 0, f"synthetic hebrew failed exit={rc}"
+```
+
+Rewritten: PIL raster → skeleton centerline → RTL trace (was font outlines,
+visually mirrored). 127 sentences × 8 variants. If it prints "No Hebrew-capable
+TTF font found", add `--font /path/to/NotoSansHebrew-Regular.ttf`.
+
+---
+
+## Cell 7 — prepare_raw (merge everything → all.jsonl)
+
+```python
+import os
+rc = os.system(
+    "python -u src/prepare_raw.py "
+    f"--raw {DATA_RAW} --output {OUTPUT / 'all.jsonl'} --no-merge-existing"
+)
+assert rc == 0, f"prepare_raw failed exit={rc}"
+# Expect lines like: iam (~11242), crohme (~3900), hebrew jsonl + corrections.
+```
+
+---
+
+## Cell 8 — build_vocab
+
+```python
+!python src/build_vocab.py \
+    --manifest {OUTPUT / "all.jsonl"} \
+    --output configs/vocab.txt
+```
+
+---
+
+## Cell 9 — Split train / val (stratified + balanced per-mode)
 
 ```python
 !python src/split_manifest.py \
     --source {OUTPUT / "all.jsonl"} \
     --train-out {OUTPUT / "train.jsonl"} \
     --val-out {OUTPUT / "val.jsonl"} \
-    --val-ratio 0.1 \
-    --seed 1337
+    --val-ratio 0.1 --seed 1337 \
+    --balance-modes --per-mode-target 6000 --max-oversample 8
 ```
+
+`--balance-modes` downsamples the dominant mode (English) and oversamples minority
+modes (Hebrew/math) with jitter, so English no longer drowns Hebrew. The split is
+**stratified**, so every mode is represented in val (real `val_hebrew` / `val_math`).
+Tune `--per-mode-target` (e.g. raise once you have more real Hebrew).
+
+> The old "Cell 10 — Oversample ×2 + English boost" is **removed** — `--balance-modes`
+> replaces it. Do not run a manual oversample on top of it.
 
 ---
 
-## Cell 10 — Oversample (×2) + English boost
-
-```python
-import random
-from dataset import read_manifest, write_manifest, HandwritingSample
-
-def is_priority(s: HandwritingSample) -> bool:
-    m = (s.mode or "").lower()
-    if m in ("hebrew", "mixed", "correction"):
-        return True
-    if any("\u0590" <= c <= "\u05FF" for c in s.text):
-        return "$" in s.text or any("a" <= c.lower() <= "z" for c in s.text if c.isascii())
-    return False
-
-def is_long_english(s: HandwritingSample) -> bool:
-    m = (s.mode or "").lower()
-    return m in ("english", "text") and len(s.text.strip()) > 12
-
-train_path = OUTPUT / "train.jsonl"
-train = read_manifest(train_path)
-priority = [s for s in train if is_priority(s)]
-english_long = [s for s in train if is_long_english(s)]
-rest = [s for s in train if s not in priority and s not in english_long]
-train_boosted = rest + priority * 2 + english_long * 2
-random.Random(1337).shuffle(train_boosted)
-write_manifest(train_path, train_boosted)
-print(f"Train: {len(train_boosted)} | priority x2: {len(priority)} | english/text x2: {len(english_long)}")
-```
-
----
-
-## Cell 10b — Curriculum manifests (short + medium + IAM-long)
+## Cell 10b — Curriculum manifests (cleaned: dedup + single-line)
 
 ```python
 !python src/build_curriculum_manifest.py \
@@ -156,8 +235,12 @@ print(f"Train: {len(train_boosted)} | priority x2: {len(priority)} | english/tex
     --max-chars-short 32 \
     --medium-min-chars 33 \
     --medium-max-chars 72 \
-    --iam-min-chars 24
+    --iam-min-chars 24 \
+    --rewrite-train
 ```
+
+`--rewrite-train` overwrites `train.jsonl` with the cleaned (deduped, single-line)
+set so Phase 2b trains on clean data too.
 
 ---
 
@@ -329,8 +412,22 @@ rep_pen = float(cfg.get("decode_repetition_penalty", 2.5))
 val = read_manifest(cfg["val_manifest"])
 random.seed(42)
 
+# Evaluate a stratified sample so every mode gets a fair per-mode check.
+from collections import defaultdict
+by_mode_samples = defaultdict(list)
+for s in val:
+    by_mode_samples[(s.mode or "auto").lower()].append(s)
+
+picked = []
+for m, items in by_mode_samples.items():
+    random.shuffle(items)
+    picked.extend(items[: min(20, len(items))])
+
 ok, bad = 0, 0
-for s in random.sample(val, min(24, len(val))):
+mode_cer = defaultdict(list)          # mode -> [cer, ...]
+mode_collapse = defaultdict(lambda: [0, 0])  # mode -> [collapse_count, total]
+for s in picked:
+    m = (s.mode or "auto").lower()
     pred = greedy_decode(
         model, tok, s.points, device,
         max_seq_len=cfg["max_seq_len"],
@@ -339,14 +436,19 @@ for s in random.sample(val, min(24, len(val))):
     )
     c = cer(pred, s.text)
     collapsed = is_template_collapse(pred, s.text, s.mode)
-    tag = "COLLAPSE" if collapsed else "OK"
+    mode_cer[m].append(c)
+    mode_collapse[m][1] += 1
     if collapsed:
+        mode_collapse[m][0] += 1
         bad += 1
     else:
         ok += 1
-    print(f"[{tag}] [{s.mode}] CER={c:.2f}")
-    print(f"  truth: {s.text[:70]!r}")
-    print(f"  pred:  {pred[:70]!r}\n")
+    print(f"[{'COLLAPSE' if collapsed else 'OK'}] [{m}] CER={c:.2f}  truth={s.text[:50]!r}  pred={pred[:50]!r}")
+
+per_mode_val_cer = {m: (sum(v) / len(v)) for m, v in mode_cer.items() if v}
+per_mode_collapse = {m: (cc, tt) for m, (cc, tt) in mode_collapse.items()}
+print("\nPer-mode val_cer:", {m: round(v, 3) for m, v in per_mode_val_cer.items()})
+print("Per-mode collapse:", {m: f"{cc}/{tt}" for m, (cc, tt) in per_mode_collapse.items()})
 
 val_cer = float(ckpt.get("val_cer", 99))
 print(f"Summary: OK={ok} COLLAPSE={bad} | epoch={ckpt.get('epoch')} val_cer={val_cer}")
@@ -355,6 +457,9 @@ ready, reason = passes_export_gate(
     val_cer=val_cer,
     collapse_count=bad,
     sample_count=ok + bad,
+    per_mode_val_cer=per_mode_val_cer,
+    per_mode_collapse=per_mode_collapse,
+    require_modes=("english", "hebrew", "math"),
 )
 print("Export gate:", ready, "-", reason)
 print("(Also need eval_report cer_mean <= 0.35 in cell 15)")

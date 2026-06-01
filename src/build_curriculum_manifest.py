@@ -12,6 +12,41 @@ def _text_len(sample: HandwritingSample) -> int:
     return len(sample.text.strip())
 
 
+def _dedup_key(sample: HandwritingSample) -> tuple:
+    """Stable identity for a sample: mode + text + a cheap point signature."""
+    pts = sample.points or []
+    first = tuple(pts[0]) if pts else ()
+    last = tuple(pts[-1]) if pts else ()
+    return ((sample.mode or "auto").lower(), sample.text.strip(), len(pts), first, last)
+
+
+def _is_single_line(sample: HandwritingSample) -> bool:
+    text = sample.text or ""
+    return "\n" not in text and "\r" not in text
+
+
+def _clean_samples(samples: list[HandwritingSample]) -> list[HandwritingSample]:
+    """Drop multi-line samples and exact duplicates (keep first occurrence)."""
+    seen: set[tuple] = set()
+    out: list[HandwritingSample] = []
+    dropped_multiline = 0
+    dropped_dup = 0
+    for s in samples:
+        if not _is_single_line(s):
+            dropped_multiline += 1
+            continue
+        key = _dedup_key(s)
+        if key in seen:
+            dropped_dup += 1
+            continue
+        seen.add(key)
+        out.append(s)
+    print(
+        f"cleaned: kept {len(out)} (dropped {dropped_multiline} multi-line, {dropped_dup} duplicates)"
+    )
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", default="output/train.jsonl")
@@ -22,9 +57,24 @@ def main() -> None:
     parser.add_argument("--medium-min-chars", type=int, default=33)
     parser.add_argument("--medium-max-chars", type=int, default=72)
     parser.add_argument("--iam-min-chars", type=int, default=24)
+    parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help="Skip dedup + single-line filtering (not recommended).",
+    )
+    parser.add_argument(
+        "--rewrite-train",
+        action="store_true",
+        help="Also overwrite --train with the cleaned (deduped, single-line) samples.",
+    )
     args = parser.parse_args()
 
     samples = read_manifest(Path(args.train))
+    if not args.no_clean:
+        samples = _clean_samples(samples)
+        if args.rewrite_train:
+            write_manifest(Path(args.train), samples)
+            print(f"rewrote cleaned full train -> {args.train}")
     short = [s for s in samples if _text_len(s) <= args.max_chars_short]
     medium = [
         s

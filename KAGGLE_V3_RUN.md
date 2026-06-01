@@ -50,11 +50,16 @@ python src\pack_kaggle_zip.py --output handwriting_training_bundle.zip
 
 ---
 
+## אם רואים `wan theroulis` / `val_cer` ~0.85 אבל פלט גרוע
+
+זה **לא מוכן** — CER נמוך כי הפלט **קצר**, לא כי נכון.  
+ראה [`HANDWRITING_REALITY.md`](HANDWRITING_REALITY.md).
+
+**אל תריץ עוד אימון על פסקאות IAM.** הצעד הבא בפרויקט: **אימון שורה-שורה** (max ~64 תווים).
+
 ## אם שוב נכשל על IAM
 
-המודל עדיין עלול לא להגיע לאיכות GoodNotes. אז:
-
-- יותר נתוני IAM ב-ZIP
-- או זיהוי **שורה-שורה** באפליקציה (לא פסקה שלמה)
+- יותר נתוני IAM **מפוצלים לשורות**
+- ML Kit לאנגלית ארוכה באפליקציה (כבר קיים כ-fallback)
 
 Decode משופר (`decode_quality`) עוזר ב-Python — **לא** ב-ONNX באנדרואיד עד שנוסיף אותו גם ב-Kotlin.

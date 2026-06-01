@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from dataset import HandwritingSample, write_manifest
+from skeletonize import skeleton_to_strokes, to_binary
 
 # Map folder names (Latin transliteration) to Hebrew letters when needed.
 _FOLDER_TO_HEBREW = {
@@ -29,23 +30,18 @@ def _label_from_path(path: Path) -> str:
     return name[:1] if name else "?"
 
 
-def _skeleton_to_points(img: Image.Image, max_points: int = 80) -> list[list[float]]:
+def _skeleton_to_points(img: Image.Image, max_points: int = 120) -> list[list[float]]:
+    """
+    Convert a character image to a CENTERLINE pen path via Zhang-Suen thinning
+    + ordered tracing (shared skeletonize util), instead of a raw raster scan.
+    Auto-inverts when the image is light-on-dark.
+    """
     arr = np.asarray(img.convert("L"), dtype=np.float32)
-    arr = (arr < 128).astype(np.uint8)
-    ys, xs = np.where(arr > 0)
-    if len(xs) < 4:
-        return []
-    order = np.lexsort((xs, ys))
-    xs, ys = xs[order], ys[order]
-    if len(xs) > max_points:
-        idx = np.linspace(0, len(xs) - 1, max_points, dtype=int)
-        xs, ys = xs[idx], ys[idx]
-    points: list[list[float]] = []
-    t = 0.0
-    for i, (x, y) in enumerate(zip(xs, ys)):
-        points.append([float(x), float(y), t])
-        t += 2.0 if i == 0 else 1.0
-    return points
+    binary = to_binary(arr)
+    # If "ink" covers most of the image, the image is inverted; flip it.
+    if binary.mean() > 0.5:
+        binary = to_binary(255.0 - arr)
+    return skeleton_to_strokes(binary, max_points=max_points, rtl=True)
 
 
 def _label_from_hf(label: str) -> str:
