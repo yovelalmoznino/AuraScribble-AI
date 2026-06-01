@@ -3,7 +3,11 @@ from __future__ import annotations
 import torch
 
 from dataset import points_to_relative_features
+from decode_quality import is_template_collapse
 from tokenizer import CharTokenizer
+
+# Penalize logits for chars that extend known bad partial decodes (greedy only).
+_TEMPLATE_CHAR_PENALTY = 5.0
 
 
 def greedy_decode(
@@ -38,6 +42,17 @@ def greedy_decode(
     if prefix_id is not None:
         token_ids.append(prefix_id)
 
+    start = 1 + (1 if prefix_id is not None else 0)
+
+    def _apply_template_penalty(row: torch.Tensor) -> None:
+        partial = tokenizer.decode(token_ids[start:], rtl_aware=False, mode=mode)
+        if not is_template_collapse(partial, mode=mode):
+            return
+        for ch in set(partial.lower() + "theand.\\frac{12}x"):
+            tid = tokenizer.stoi.get(ch)
+            if tid is not None and 0 <= tid < row.shape[0]:
+                row[tid] = row[tid] / _TEMPLATE_CHAR_PENALTY
+
     for _ in range(max_steps):
         window = token_ids + [pad_id] * max(0, max_tgt_window - len(token_ids))
         window = window[:max_tgt_window]
@@ -58,10 +73,10 @@ def greedy_decode(
             stuck = token_ids[-1]
             if 0 <= stuck < row.shape[0]:
                 row[stuck] = row[stuck] / max(repetition_penalty**3, 8.0)
+        _apply_template_penalty(row)
         next_id = int(row.argmax().item())
         if next_id in (eos_id, pad_id):
             break
         token_ids.append(next_id)
 
-    start = 1 + (1 if prefix_id is not None else 0)
     return tokenizer.decode(token_ids[start:], rtl_aware=True, mode=mode)

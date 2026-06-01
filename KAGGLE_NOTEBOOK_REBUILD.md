@@ -1,14 +1,14 @@
-# AuraScribble — Kaggle Notebook v3 (Rebuild)
+# AuraScribble — Kaggle Notebook v3.1 (Rebuild)
 
-Copy each cell into a **new** Kaggle notebook. Order: **1 → 17**.
+Copy each cell into a **new** Kaggle notebook. Order: **1 → 18**.
 
-**v3 changes (vs failed 40-epoch run):**
-- Curriculum: **short lines → full train** (two phases)
-- Oversample **×2** (not ×3/×5) + extra **english/text** boost
-- **Early stopping** (6 epochs without val_cer improvement)
-- `val_max_samples: 300` (faster validation)
-- Stronger **decode anti-repetition** (fixes `the the the`)
-- Higher **text/english** loss weight, lower hebrew/mixed
+**Quick start (עברית):** see [`KAGGLE_V3_RUN.md`](KAGGLE_V3_RUN.md)
+
+**v3.1 changes (after `the and` template collapse):**
+- Curriculum **4 steps:** short → **medium** → full → **IAM-long only**
+- Stricter **`decode_quality`** (flags `the and`, single `ה`, default `\frac{1}`)
+- Phase 2b: **patience 12**, lr **2e-5**; Phase 2c: IAM-only, lr **1e-5**
+- Training logs **`val template_collapse`** rate each epoch
 
 ## Kaggle settings
 
@@ -145,13 +145,18 @@ print(f"Train: {len(train_boosted)} | priority x2: {len(priority)} | english/tex
 
 ---
 
-## Cell 10b — Curriculum: short-line manifest
+## Cell 10b — Curriculum manifests (short + medium + IAM-long)
 
 ```python
 !python src/build_curriculum_manifest.py \
     --train {OUTPUT / "train.jsonl"} \
     --short-out {OUTPUT / "train_short.jsonl"} \
-    --max-chars 32
+    --medium-out {OUTPUT / "train_medium.jsonl"} \
+    --iam-out {OUTPUT / "train_iam_long.jsonl"} \
+    --max-chars-short 32 \
+    --medium-min-chars 33 \
+    --medium-max-chars 72 \
+    --iam-min-chars 24
 ```
 
 ---
@@ -189,7 +194,7 @@ cfg["label_smoothing"] = 0.1
 cfg["val_max_samples"] = 300
 cfg["early_stop_patience"] = 6
 cfg["early_stop_min_delta"] = 0.01
-cfg["decode_repetition_penalty"] = 2.0
+cfg["decode_repetition_penalty"] = 2.5
 
 cfg_dst.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
 print("epochs:", cfg["epochs"], "early_stop:", cfg["early_stop_patience"])
@@ -220,29 +225,82 @@ assert rc == 0, f"Phase 1 failed exit={rc}"
 
 ---
 
-## Cell 12b — Train phase 2 (full train, resume best)
+## Cell 12b — Train phase 2a (medium lines, resume)
 
 ```python
 import yaml
 from pathlib import Path
 
 cfg = yaml.safe_load(Path("configs/train_kaggle.yaml").read_text(encoding="utf-8"))
-cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
-cfg["max_tgt_len"] = 128
-cfg["epochs"] = 30
+p2a = cfg.get("curriculum_phase2a") or {}
+cfg["train_manifest"] = str(OUTPUT / "train_medium.jsonl")
+cfg["max_tgt_len"] = int(p2a.get("max_tgt_len", 96))
+cfg["epochs"] = int(p2a.get("epochs", 16))
+cfg["learning_rate"] = float(p2a.get("learning_rate", 3e-5))
+cfg["early_stop_patience"] = int(p2a.get("early_stop_patience", 8))
 cfg["resume_from_checkpoint"] = True
 cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
 Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
-print("Phase 2: full train, resume from checkpoint_best.pt")
+print("Phase 2a: medium", cfg["train_manifest"])
 
 import os
 rc = os.system("python -u src/train.py --config configs/train_kaggle.yaml")
-assert rc == 0, f"Phase 2 failed exit={rc}"
+assert rc == 0, f"Phase 2a failed exit={rc}"
 ```
 
 ---
 
-## Cell 13 — Sanity (collapse check)
+## Cell 12c — Train phase 2b (full train, resume)
+
+```python
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load(Path("configs/train_kaggle.yaml").read_text(encoding="utf-8"))
+p2b = cfg.get("curriculum_phase2b") or {}
+cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
+cfg["max_tgt_len"] = int(p2b.get("max_tgt_len", 128))
+cfg["epochs"] = int(p2b.get("epochs", 35))
+cfg["learning_rate"] = float(p2b.get("learning_rate", 2e-5))
+cfg["early_stop_patience"] = int(p2b.get("early_stop_patience", 12))
+cfg["resume_from_checkpoint"] = True
+cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
+Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+print("Phase 2b: full train", cfg["early_stop_patience"], "patience")
+
+import os
+rc = os.system("python -u src/train.py --config configs/train_kaggle.yaml")
+assert rc == 0, f"Phase 2b failed exit={rc}"
+```
+
+---
+
+## Cell 12d — Train phase 2c (IAM / English long only, resume)
+
+```python
+import yaml
+from pathlib import Path
+
+cfg = yaml.safe_load(Path("configs/train_kaggle.yaml").read_text(encoding="utf-8"))
+p2c = cfg.get("curriculum_phase2c") or {}
+cfg["train_manifest"] = str(OUTPUT / "train_iam_long.jsonl")
+cfg["max_tgt_len"] = int(p2c.get("max_tgt_len", 128))
+cfg["epochs"] = int(p2c.get("epochs", 20))
+cfg["learning_rate"] = float(p2c.get("learning_rate", 1e-5))
+cfg["early_stop_patience"] = int(p2c.get("early_stop_patience", 10))
+cfg["resume_from_checkpoint"] = True
+cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
+Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
+print("Phase 2c: IAM long only")
+
+import os
+rc = os.system("python -u src/train.py --config configs/train_kaggle.yaml")
+assert rc == 0, f"Phase 2c failed exit={rc}"
+```
+
+---
+
+## Cell 13 — Sanity (strict template collapse check)
 
 ```python
 import random
@@ -250,6 +308,7 @@ import torch, yaml
 from pathlib import Path
 from dataset import read_manifest
 from decode import greedy_decode
+from decode_quality import is_template_collapse, passes_export_gate
 from metrics import cer
 from model_factory import build_model
 from tokenizer import CharTokenizer
@@ -266,19 +325,9 @@ model = build_model(cfg, len(tok)).to(device)
 model.load_state_dict(ckpt["model_state"])
 model.eval()
 
-rep_pen = float(cfg.get("decode_repetition_penalty", 2.0))
+rep_pen = float(cfg.get("decode_repetition_penalty", 2.5))
 val = read_manifest(cfg["val_manifest"])
 random.seed(42)
-
-def collapsed(pred: str) -> bool:
-    if pred.count("the the") >= 2:
-        return True
-    if pred.count("\\times \\times") >= 2:
-        return True
-    words = pred.split()
-    if len(words) >= 6 and len(set(words)) <= 2:
-        return True
-    return False
 
 ok, bad = 0, 0
 for s in random.sample(val, min(24, len(val))):
@@ -289,8 +338,9 @@ for s in random.sample(val, min(24, len(val))):
         repetition_penalty=rep_pen,
     )
     c = cer(pred, s.text)
-    tag = "COLLAPSE" if collapsed(pred) else "OK"
-    if tag == "COLLAPSE":
+    collapsed = is_template_collapse(pred, s.text, s.mode)
+    tag = "COLLAPSE" if collapsed else "OK"
+    if collapsed:
         bad += 1
     else:
         ok += 1
@@ -298,8 +348,16 @@ for s in random.sample(val, min(24, len(val))):
     print(f"  truth: {s.text[:70]!r}")
     print(f"  pred:  {pred[:70]!r}\n")
 
-print(f"Summary: OK={ok} COLLAPSE={bad} | checkpoint epoch={ckpt.get('epoch')} val_cer={ckpt.get('val_cer')}")
-print("Export only if bad==0 or bad<=2 AND val_cer < 0.5")
+val_cer = float(ckpt.get("val_cer", 99))
+print(f"Summary: OK={ok} COLLAPSE={bad} | epoch={ckpt.get('epoch')} val_cer={val_cer}")
+ready, reason = passes_export_gate(
+    cer_mean=val_cer,
+    val_cer=val_cer,
+    collapse_count=bad,
+    sample_count=ok + bad,
+)
+print("Export gate:", ready, "-", reason)
+print("(Also need eval_report cer_mean <= 0.35 in cell 15)")
 ```
 
 ---
@@ -409,7 +467,10 @@ Re-upload the ZIP to Kaggle, then paste cells into a **new** notebook.
 |-------|--------|
 | `val_cer` (best checkpoint) | **< 0.5** (ideal < 0.35) |
 | `val_text` | **< 1.0** (not ~3.0) |
-| Cell 13 `COLLAPSE` count | **0–2** max |
+| Cell 13 `COLLAPSE` count | **≤ 2** / 24 (`the and`, `ה`, `\frac{1}`) |
+| `val template_collapse` in train log | trending **down** |
 | `eval_report.json` cer_mean | **≤ 0.35** for Firebase |
 
-If phase 2 early-stops with `val_cer` still > 1.0 — do **not** export; fix data (more IAM) before another run.
+**v3.1 curriculum:** phase 1 short → 2a medium → 2b full → 2c IAM-long. Do not skip 2a/2c.
+
+If `val_cer` still > 1.0 after 2c — add more IAM to ZIP before another run.

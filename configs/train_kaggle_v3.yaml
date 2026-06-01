@@ -1,4 +1,4 @@
-# Kaggle v3 — curriculum (short → full), early stop, less oversample, stronger regularization
+# Kaggle v3.1 — short → medium → full → IAM-long, stricter collapse checks
 output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "output/checkpoint_best.pt"
@@ -30,7 +30,7 @@ min_points: 3
 min_text_len: 1
 decode_max_steps: 96
 decode_max_tgt_window: 128
-decode_repetition_penalty: 2.0
+decode_repetition_penalty: 2.5
 
 mode_loss_weights:
   hebrew: 2.0
@@ -65,8 +65,29 @@ model:
   decoder_hidden: 256
   dropout: 0.2
 
-# Phase 1 only (notebook overrides train_manifest + max_tgt_len)
 curriculum_phase1:
   train_manifest: "output/train_short.jsonl"
   max_tgt_len: 64
   epochs: 18
+  early_stop_patience: 6
+
+curriculum_phase2a:
+  train_manifest: "output/train_medium.jsonl"
+  max_tgt_len: 96
+  epochs: 16
+  learning_rate: 0.00003
+  early_stop_patience: 8
+
+curriculum_phase2b:
+  train_manifest: "output/train.jsonl"
+  max_tgt_len: 128
+  epochs: 35
+  learning_rate: 0.00002
+  early_stop_patience: 12
+
+curriculum_phase2c:
+  train_manifest: "output/train_iam_long.jsonl"
+  max_tgt_len: 128
+  epochs: 20
+  learning_rate: 0.00001
+  early_stop_patience: 10

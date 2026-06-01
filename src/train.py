@@ -24,6 +24,7 @@ from dataset import (
     read_manifest,
 )
 from decode import greedy_decode
+from decode_quality import is_template_collapse
 from metrics import cer
 from model_factory import build_model
 from tokenizer import CharTokenizer
@@ -188,6 +189,7 @@ def _evaluate_val_cer(
     model.eval()
     scores: list[float] = []
     by_mode: dict[str, list[float]] = {}
+    template_collapses = 0
     for sample in subset:
         pred = greedy_decode(
             model,
@@ -200,6 +202,8 @@ def _evaluate_val_cer(
             repetition_penalty=repetition_penalty,
             mode=sample.mode,
         )
+        if is_template_collapse(pred, sample.text, sample.mode):
+            template_collapses += 1
         score = cer(pred, sample.text)
         scores.append(score)
         key = sample.mode.lower()
@@ -207,6 +211,12 @@ def _evaluate_val_cer(
 
     mean_cer = sum(scores) / max(1, len(scores))
     mode_means = {k: sum(v) / len(v) for k, v in by_mode.items()}
+    collapse_rate = template_collapses / max(1, len(scores))
+    if subset:
+        print(
+            f"  val template_collapse: {template_collapses}/{len(scores)} ({collapse_rate:.1%})",
+            flush=True,
+        )
     model.train()
     return mean_cer, mode_means
 
