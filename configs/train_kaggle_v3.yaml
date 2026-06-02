@@ -3,7 +3,7 @@ output_dir: "output"
 vocab_path: "configs/vocab.txt"
 model_path: "output/checkpoint_best.pt"
 resume_from_checkpoint: false
-model_type: "transformer"
+model_type: "hybrid"
 
 train_manifest: "output/train.jsonl"
 val_manifest: "output/val.jsonl"
@@ -11,9 +11,11 @@ val_manifest: "output/val.jsonl"
 max_seq_len: 256
 max_tgt_len: 128
 batch_size: 24
-learning_rate: 0.00005
+learning_rate: 0.0002
 weight_decay: 0.01
-label_smoothing: 0.1
+label_smoothing: 0.05
+warmup_frac: 0.06
+lr_min_frac: 0.1
 epochs: 30
 seed: 1337
 num_workers: 0
@@ -21,23 +23,28 @@ grad_clip_norm: 1.0
 use_amp: true
 
 val_every_epochs: 1
-val_max_samples: 300
+val_max_samples: 1000
 log_every_batches: 15
-early_stop_patience: 6
-early_stop_min_delta: 0.01
+early_stop_patience: 15
+early_stop_min_delta: 0.003
 
 min_points: 3
 min_text_len: 1
 decode_max_steps: 96
 decode_max_tgt_window: 128
 decode_repetition_penalty: 2.5
+decode_strategy: "joint"
+decode_ctc_weight: 0.55
+decode_ar_weight: 0.45
+ctc_loss_weight: 0.3
+ar_loss_weight: 0.7
 
 mode_loss_weights:
   hebrew: 2.0
   mixed: 2.0
   correction: 3.0
-  english: 3.0
-  math: 2.0
+  english: 2.5
+  math: 3.0
   text: 3.0
   auto: 1.0
 
@@ -47,8 +54,8 @@ d_model: 256
 nhead: 8
 num_layers: 4
 encoder_layers: 4
-decoder_layers: 2
-dropout: 0.2
+decoder_layers: 4
+dropout: 0.1
 
 export:
   onnx_file: output/model.onnx
@@ -63,31 +70,33 @@ model:
   encoder_hidden: 256
   encoder_layers: 4
   decoder_hidden: 256
-  dropout: 0.2
+  decoder_layers: 4
+  dropout: 0.1
 
 curriculum_phase1:
   train_manifest: "output/train_short.jsonl"
   max_tgt_len: 64
   epochs: 18
-  early_stop_patience: 6
+  learning_rate: 0.0002
+  early_stop_patience: 15
 
 curriculum_phase2a:
   train_manifest: "output/train_medium.jsonl"
   max_tgt_len: 96
-  epochs: 16
-  learning_rate: 0.00003
-  early_stop_patience: 8
+  epochs: 24
+  learning_rate: 0.00012
+  early_stop_patience: 20
 
 curriculum_phase2b:
   train_manifest: "output/train.jsonl"
   max_tgt_len: 128
   epochs: 35
-  learning_rate: 0.00002
-  early_stop_patience: 12
+  learning_rate: 0.00008
+  early_stop_patience: 15
 
 curriculum_phase2c:
   train_manifest: "output/train_iam_long.jsonl"
   max_tgt_len: 128
   epochs: 20
-  learning_rate: 0.00001
-  early_stop_patience: 10
+  learning_rate: 0.00004
+  early_stop_patience: 15

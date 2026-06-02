@@ -257,7 +257,7 @@ pwsh ./scripts/retrain.ps1
 ```
 
 ```powershell
-python src/upload_firebase.py --local output/model.onnx --vocab configs/vocab.txt
+python src/upload_firebase.py --local output/model.onnx --vocab output/vocab.from_checkpoint.txt
 ```
 
 הסקרipt מעלה:
@@ -265,7 +265,7 @@ python src/upload_firebase.py --local output/model.onnx --vocab configs/vocab.tx
 | קובץ מקומי | נתיב ב-Firebase |
 |------------|-----------------|
 | `output/model.onnx` | `models/latest_handwriting.onnx` |
-| `configs/vocab.txt` | `models/latest_vocab.txt` (לשימוש עתידי; האפליקציה כרגע טוענת vocab מ-assets) |
+| `output/vocab.from_checkpoint.txt` | `models/latest_vocab.txt` (חובה שיתאים ל-checkpoint; האפליקציה טוענת OTA vocab) |
 
 ### העלאה ידנית (גיבוי)
 

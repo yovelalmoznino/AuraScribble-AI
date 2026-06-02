@@ -8,7 +8,7 @@ import torch
 import yaml
 
 from dataset import read_manifest
-from decode import greedy_decode
+from decode import ctc_greedy_decode, greedy_decode, joint_decode
 from model_factory import build_model
 from tokenizer import CharTokenizer
 
@@ -43,6 +43,12 @@ def main() -> None:
     parser.add_argument("--manifest", default="data/processed/val.jsonl")
     parser.add_argument("--output", default="output/predictions.jsonl")
     parser.add_argument("--limit", type=int, default=0, help="Max samples (0 = all)")
+    parser.add_argument(
+        "--decode_strategy",
+        default="",
+        choices=["", "ar", "ctc", "joint"],
+        help="Override decode strategy from config (ar|ctc|joint)",
+    )
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -59,23 +65,43 @@ def main() -> None:
         samples = samples[: args.limit]
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    strategy = (args.decode_strategy or str(config.get("decode_strategy", "joint"))).lower()
+    ctc_w = float(config.get("decode_ctc_weight", 0.5))
+    ar_w = float(config.get("decode_ar_weight", 0.5))
 
     with out_path.open("w", encoding="utf-8") as f:
         for idx, sample in enumerate(samples):
-            pred = greedy_decode(
-                model,
-                tokenizer,
-                sample.points,
-                device,
+            kwargs = dict(
                 max_seq_len=config["max_seq_len"],
                 max_steps=int(config.get("decode_max_steps", 128)),
                 max_tgt_window=int(config.get("decode_max_tgt_window", 128)),
                 repetition_penalty=float(config.get("decode_repetition_penalty", 2.0)),
                 mode=sample.mode,
             )
+            if strategy == "ctc":
+                pred = ctc_greedy_decode(
+                    model,
+                    tokenizer,
+                    sample.points,
+                    device,
+                    max_seq_len=kwargs["max_seq_len"],
+                    mode=kwargs["mode"],
+                )
+            elif strategy == "joint":
+                pred = joint_decode(
+                    model,
+                    tokenizer,
+                    sample.points,
+                    device,
+                    **kwargs,
+                    ctc_weight=ctc_w,
+                    ar_weight=ar_w,
+                )
+            else:
+                pred = greedy_decode(model, tokenizer, sample.points, device, **kwargs)
             f.write(json.dumps({"id": idx, "prediction": pred}, ensure_ascii=False) + "\n")
 
-    print(f"Wrote {len(samples)} predictions to {out_path}")
+    print(f"Wrote {len(samples)} predictions to {out_path} (strategy={strategy}, ctc_w={ctc_w}, ar_w={ar_w})")
 
 
 if __name__ == "__main__":

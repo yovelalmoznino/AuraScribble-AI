@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 import time
@@ -56,7 +57,7 @@ class HandwritingDataset(Dataset):
 
     def __getitem__(
         self, idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
         sample = self.samples[idx]
         feats = points_to_relative_features(sample.points)
         if self.augment:
@@ -76,23 +77,35 @@ class HandwritingDataset(Dataset):
 
         decoder_in = torch.tensor(token_ids[:-1], dtype=torch.long)
         targets = torch.tensor(token_ids[1:], dtype=torch.long)
-        return input_tensor, decoder_in, targets, sample.text, sample.mode
+        # CTC targets intentionally exclude BOS/EOS and mode-prefix tokens.
+        ctc_ids = self.tokenizer.encode(
+            sample.text,
+            add_special_tokens=False,
+            mode=sample.mode,
+            add_mode_prefix=False,
+        )
+        ctc_targets = torch.tensor(ctc_ids, dtype=torch.long)
+        return input_tensor, decoder_in, targets, ctc_targets, sample.text, sample.mode
 
 
 def collate_fn(
-    batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, str, str]],
+    batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]],
     pad_id: int,
 ) -> dict:
-    inputs, decoder_ins, targets, texts, modes = zip(*batch)
+    inputs, decoder_ins, targets, ctc_targets, texts, modes = zip(*batch)
     input_lens = torch.tensor([len(x) for x in inputs], dtype=torch.long)
     inputs_padded = pad_sequence(inputs, batch_first=True, padding_value=0.0)
     decoder_padded = pad_sequence(decoder_ins, batch_first=True, padding_value=pad_id)
     targets_padded = pad_sequence(targets, batch_first=True, padding_value=pad_id)
+    ctc_target_lens = torch.tensor([len(x) for x in ctc_targets], dtype=torch.long)
+    ctc_targets_padded = pad_sequence(ctc_targets, batch_first=True, padding_value=pad_id)
     return {
         "inputs": inputs_padded,
         "input_lens": input_lens,
         "decoder_in": decoder_padded,
         "targets": targets_padded,
+        "ctc_targets": ctc_targets_padded,
+        "ctc_target_lens": ctc_target_lens,
         "texts": list(texts),
         "modes": list(modes),
     }
@@ -334,6 +347,10 @@ def train(
         reduction="none",
         label_smoothing=label_smoothing,
     )
+    criterion_ctc = nn.CTCLoss(blank=tokenizer.blank_id, reduction="none", zero_infinity=True)
+    ctc_loss_weight = float(config.get("ctc_loss_weight", 0.3))
+    ar_loss_weight = float(config.get("ar_loss_weight", 0.7))
+    use_hybrid_loss = bool(config.get("model_type", "transformer").lower() == "hybrid")
     lr = float(config.get("learning_rate", 2e-5))
     weight_decay = float(config.get("weight_decay", 0.0))
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -357,16 +374,42 @@ def train(
     n_batches = len(train_loader)
     log_every = int(config.get("log_every_batches", 25))
     epochs_without_improve = 0
+
+    # Linear warmup -> cosine decay. Critical for stable from-scratch
+    # transformer training; the warmup resets at the start of each
+    # curriculum phase (each phase calls train() fresh), which is fine.
+    warmup_frac = float(config.get("warmup_frac", 0.05))
+    total_steps = max(1, n_batches * epochs_to_run)
+    warmup_steps = max(1, int(total_steps * warmup_frac))
+
+    # Cosine decays to a floor (lr_min_frac of peak) rather than to 0, so
+    # the model keeps learning through the late epochs instead of stalling
+    # when the LR collapses — important for an underfitting model.
+    lr_min_frac = float(config.get("lr_min_frac", 0.1))
+
+    def _lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            return float(step + 1) / float(warmup_steps)
+        progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+        return lr_min_frac + (1.0 - lr_min_frac) * cosine
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _lr_lambda)
+
     print(
         f"Starting training for {epochs_to_run} epochs "
         f"({n_batches} batches/epoch, log_every={log_every}, lr={lr}, "
-        f"weight_decay={weight_decay}, early_stop_patience={early_stop_patience})...",
+        f"warmup_steps={warmup_steps}/{total_steps}, "
+        f"weight_decay={weight_decay}, early_stop_patience={early_stop_patience}, "
+        f"hybrid_loss={'on' if use_hybrid_loss else 'off'})...",
         flush=True,
     )
 
     for epoch in range(epochs_to_run):
         model.train()
         total_loss = 0.0
+        total_ar_loss = 0.0
+        total_ctc_loss = 0.0
         mode_stats: dict[str, list[float]] = {}
         epoch_t0 = time.perf_counter()
         print(f"Epoch {epoch + 1}/{epochs_to_run} started...", flush=True)
@@ -376,13 +419,33 @@ def train(
             input_lens = batch["input_lens"].to(device)
             decoder_in = batch["decoder_in"].to(device)
             targets = batch["targets"].to(device)
+            ctc_targets = batch["ctc_targets"].to(device)
+            ctc_target_lens = batch["ctc_target_lens"].to(device)
             modes = batch["modes"]
 
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device.type, enabled=use_amp):
                 logits = model(inputs, input_lens, decoder_in)
                 raw_loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-                per_sample_loss = raw_loss.view(targets.size(0), -1).mean(dim=1)
+                per_sample_ar = raw_loss.view(targets.size(0), -1).mean(dim=1)
+                per_sample_loss = per_sample_ar
+                per_sample_ctc = None
+                if use_hybrid_loss and hasattr(model, "ctc_logits"):
+                    ctc_logits, ctc_input_lens = model.ctc_logits(inputs, input_lens)
+                    ctc_log_probs = torch.log_softmax(ctc_logits, dim=-1).transpose(0, 1)
+                    per_sample_ctc = criterion_ctc(
+                        ctc_log_probs,
+                        ctc_targets,
+                        ctc_input_lens,
+                        ctc_target_lens,
+                    )
+                    # CTCLoss(reduction="none") can scale with target length.
+                    # Normalize to keep CTC and AR on comparable scales.
+                    per_sample_ctc = per_sample_ctc / torch.clamp(
+                        ctc_target_lens.to(per_sample_ctc.dtype),
+                        min=1.0,
+                    )
+                    per_sample_loss = ar_loss_weight * per_sample_ar + ctc_loss_weight * per_sample_ctc
                 weights = torch.tensor(
                     [_mode_loss_weight(m, config) for m in modes],
                     device=per_sample_loss.device,
@@ -394,7 +457,11 @@ def train(
             clip_grad_norm_(model.parameters(), grad_clip)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             total_loss += loss.item()
+            total_ar_loss += float(per_sample_ar.mean().item())
+            if per_sample_ctc is not None:
+                total_ctc_loss += float(per_sample_ctc.mean().item())
 
             for i, mode in enumerate(modes):
                 mode_key = mode.lower()
@@ -411,12 +478,18 @@ def train(
         epoch_sec = time.perf_counter() - epoch_t0
         log_entry: dict = {
             "epoch": epoch + 1,
-            "train_loss": round(avg_loss, 6),
+            "train_joint_loss": round(avg_loss, 6),
+            "train_ar_loss": round(total_ar_loss / max(1, n_batches), 6),
         }
+        if use_hybrid_loss:
+            log_entry["train_ctc_loss"] = round(total_ctc_loss / max(1, n_batches), 6)
         log_str = (
             f"Epoch {epoch + 1}/{epochs_to_run} - Loss: {avg_loss:.4f} "
             f"({epoch_sec / 60:.1f} min)"
         )
+        log_str += f" | ar_loss: {log_entry['train_ar_loss']:.4f}"
+        if use_hybrid_loss:
+            log_str += f" | ctc_loss: {log_entry.get('train_ctc_loss', 0.0):.4f}"
 
         for m, losses in sorted(mode_stats.items()):
             if losses:

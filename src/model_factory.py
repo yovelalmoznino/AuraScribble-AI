@@ -5,6 +5,7 @@ from typing import Any
 import torch.nn as nn
 
 from model import HandwritingSeq2SeqModel
+from model_hybrid import HybridHandwritingModel
 from model_transformer import StrokeTransformerSeq2Seq
 
 
@@ -20,6 +21,18 @@ def build_model(config: dict[str, Any], vocab_size: int) -> nn.Module:
             layers=int(config.get("num_layers", 3)),
             dropout=dropout,
             vocab_size=vocab_size,
+        )
+
+    if model_type == "hybrid":
+        return HybridHandwritingModel(
+            input_dim=input_dim,
+            d_model=int(config.get("d_model", config.get("hidden_dim", 256))),
+            nhead=int(config.get("nhead", 8)),
+            num_encoder_layers=int(config.get("encoder_layers", config.get("num_layers", 4))),
+            num_decoder_layers=int(config.get("decoder_layers", 4)),
+            dropout=dropout,
+            vocab_size=vocab_size,
+            max_len=int(config.get("max_seq_len", 512)),
         )
 
     return StrokeTransformerSeq2Seq(

@@ -26,7 +26,8 @@ python "src/export_onnx.py" --config "configs/train.yaml" --checkpoint "output/c
 
 Write-Host "=== 6/7 Upload to Firebase (optional) ==="
 if ($env:GOOGLE_APPLICATION_CREDENTIALS -or $env:FIREBASE_SERVICE_ACCOUNT_JSON -or (Test-Path "configs/firebase_service_account.json")) {
-    python "src/upload_firebase.py" --local "output/model.onnx" --vocab "configs/vocab.txt"
+    $vocab = if (Test-Path "output/vocab.from_checkpoint.txt") { "output/vocab.from_checkpoint.txt" } else { "configs/vocab.txt" }
+    python "src/upload_firebase.py" --local "output/model.onnx" --vocab $vocab
 } else {
     Write-Host "Skipped Firebase upload — set GOOGLE_APPLICATION_CREDENTIALS or configs/firebase_service_account.json"
 }

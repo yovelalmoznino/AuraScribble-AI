@@ -19,6 +19,21 @@ except ImportError as exc:
 DEFAULT_BUCKET = "aurascribblr.firebasestorage.app"
 DEFAULT_REMOTE = "models/latest_handwriting.onnx"
 
+
+def _default_vocab_path() -> Path | None:
+    """Prefer checkpoint vocab (matches training); fall back to configs/vocab.txt."""
+    for candidate in (
+        Path("output/vocab.from_checkpoint.txt"),
+        Path("configs/vocab.txt"),
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _vocab_line_count(path: Path) -> int:
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
 _REQUIRED_SA_FIELDS = ("type", "project_id", "private_key", "client_email", "token_uri")
 
 
@@ -116,6 +131,23 @@ def main() -> None:
     args = parser.parse_args()
 
     local = Path(args.local)
+    vocab_path: Path | None = Path(args.vocab) if args.vocab else _default_vocab_path()
+    if vocab_path is None:
+        print("Warning: no vocab file found; upload with --vocab output/vocab.from_checkpoint.txt", file=sys.stderr)
+    elif args.vocab is None:
+        print(f"Auto-selected vocab: {vocab_path} ({_vocab_line_count(vocab_path)} tokens)")
+    checkpoint_vocab = Path("output/vocab.from_checkpoint.txt")
+    if (
+        vocab_path
+        and vocab_path.name != checkpoint_vocab.name
+        and checkpoint_vocab.exists()
+        and vocab_path.resolve() != checkpoint_vocab.resolve()
+    ):
+        print(
+            f"Warning: uploading {vocab_path} but {checkpoint_vocab} exists — "
+            "OTA vocab may not match the trained model.",
+            file=sys.stderr,
+        )
     try:
         upload_file(
             local,
@@ -123,8 +155,7 @@ def main() -> None:
             remote_path=args.remote,
             credentials_path=args.credentials,
         )
-        if args.vocab:
-            vocab_path = Path(args.vocab)
+        if vocab_path:
             if vocab_path.exists():
                 upload_file(
                     vocab_path,

@@ -78,9 +78,66 @@ def subsample_points(points: list[list[float]], min_dist: float = 5.0) -> list[l
     return out
 
 
+def _canonical_scale(arr: np.ndarray) -> np.ndarray:
+    """
+    Translate to origin and scale so the writing HEIGHT is ~100 units.
+
+    Datasets arrive in wildly different coordinate scales (IAM online ~thousands
+    of px, CROHME ~tens of units, Hebrew ~hundreds). Without this, a fixed-pixel
+    subsample threshold keeps every IAM point but collapses a CROHME formula to a
+    handful of points. Normalizing to a canonical height makes all modes share one
+    scale so resampling keeps comparable stroke detail everywhere.
+
+    NOTE: Android `buildInputFeature()` must apply the SAME normalization before
+    inference, or the deployed model will see out-of-distribution inputs.
+    """
+    xy = arr[:, :2].astype(np.float32)
+    xmin = float(xy[:, 0].min())
+    ymin = float(xy[:, 1].min())
+    h = float(xy[:, 1].max() - ymin)
+    w = float(xy[:, 0].max() - xmin)
+    # For a single text line width >> height; fall back to width/8 if flat.
+    span = max(h, w / 8.0, 1e-3)
+    scale = 100.0 / span
+    out = arr.astype(np.float32).copy()
+    out[:, 0] = (xy[:, 0] - xmin) * scale
+    out[:, 1] = (xy[:, 1] - ymin) * scale
+    return out
+
+
+def _resample_arclength(arr: np.ndarray, target_points: int = 200, min_dist: float = 1.5) -> np.ndarray:
+    """
+    Drop points so the kept set is ~target_points, spaced by arc length.
+
+    Uses the sample's own path length to pick the spacing, so dense samples are
+    thinned and sparse ones are preserved — consistent density across modes and
+    safely under max_seq_len.
+    """
+    if len(arr) < 2:
+        return arr
+    diffs = np.diff(arr[:, :2], axis=0)
+    seg = np.hypot(diffs[:, 0], diffs[:, 1])
+    path_len = float(seg.sum())
+    step = max(min_dist, path_len / float(max(1, target_points)))
+    kept = [arr[0]]
+    acc = 0.0
+    for i in range(1, len(arr)):
+        acc += float(seg[i - 1])
+        if acc >= step:
+            kept.append(arr[i])
+            acc = 0.0
+    if len(kept) < 2:
+        kept.append(arr[-1])
+    return np.asarray(kept, dtype=np.float32)
+
+
 def points_to_relative_features(points: list[list[float]]) -> np.ndarray:
     """
     Convert absolute points into relative (dx, dy, pen_state) features.
+
+    Pipeline: canonical scale (height -> ~100) -> arc-length resample to a stable
+    point count -> relative deltas with robust per-sample normalization. This
+    makes English/Hebrew/Math share one coordinate scale and density.
 
     pen_state:
       - 1.0 at sequence start or a large discontinuity (stroke boundary)
@@ -88,8 +145,11 @@ def points_to_relative_features(points: list[list[float]]) -> np.ndarray:
     """
     if not points:
         return np.array([[0.0, 0.0, 1.0]], dtype=np.float32)
-    points = subsample_points(points, min_dist=5.0)
     arr = np.asarray(points, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        return np.array([[0.0, 0.0, 1.0]], dtype=np.float32)
+    arr = _canonical_scale(arr)
+    arr = _resample_arclength(arr, target_points=200, min_dist=1.5)
     if arr.ndim != 2 or arr.shape[1] < 2:
         return np.array([[0.0, 0.0, 1.0]], dtype=np.float32)
 

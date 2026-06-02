@@ -41,9 +41,10 @@ handwriting-model/
 ## Cell 1 — Markdown
 
 ```markdown
-# AuraScribble handwriting v3
-- Curriculum: short lines → full IAM/hebrew/math
-- Early stopping on val_cer
+# AuraScribble handwriting v4 (Hybrid CTC + AR)
+- Architecture: Conv+Transformer encoder, CTC head + AR decoder head
+- Curriculum: short lines → medium → full IAM/hebrew/math
+- Early stopping on val_cer (with larger validation sample)
 - Upload to Firebase only if eval CER ≤ 0.35
 ```
 
@@ -268,20 +269,30 @@ cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
 cfg["resume_from_checkpoint"] = False
 
 # v3 defaults (safe to tweak)
+cfg["model_type"] = "hybrid"         # new v4 architecture
 cfg["epochs"] = 30
-cfg["learning_rate"] = 5e-5
+cfg["learning_rate"] = 2e-4          # linear warmup before cosine decay
+cfg["warmup_frac"] = 0.06
+cfg["lr_min_frac"] = 0.1             # cosine decays to 10% of peak, not 0 (keep learning late)
 cfg["batch_size"] = 24
-cfg["dropout"] = 0.2
+cfg["dropout"] = 0.1                 # lowered 0.2->0.1: model was UNDERfitting, not overfitting
 cfg["weight_decay"] = 0.01
-cfg["label_smoothing"] = 0.1
-cfg["val_max_samples"] = 300
-cfg["early_stop_patience"] = 6
-cfg["early_stop_min_delta"] = 0.01
+cfg["label_smoothing"] = 0.05        # lowered 0.1->0.05: 0.1 added a ~0.83 nat loss floor
+cfg["decoder_layers"] = 4            # raised 2->4: decoder was the capacity bottleneck
+cfg["ctc_loss_weight"] = 0.3         # hybrid loss (normalized): keep CTC as stabilizer, not dominant
+cfg["ar_loss_weight"] = 0.7          # prioritize AR objective after CTC normalization
+cfg["decode_strategy"] = "joint"     # evaluate/infer with AR+CTC candidate fusion
+cfg["decode_ctc_weight"] = 0.55
+cfg["decode_ar_weight"] = 0.45
+cfg["val_max_samples"] = 1000
+cfg["early_stop_patience"] = 15      # raised 6->15: greedy val_cer is noisy, don't stop early
+cfg["early_stop_min_delta"] = 0.003  # lowered so small real gains don't trip early-stop
 cfg["decode_repetition_penalty"] = 2.5
 
 cfg_dst.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
-print("epochs:", cfg["epochs"], "early_stop:", cfg["early_stop_patience"])
-print("val_max_samples:", cfg["val_max_samples"])
+print("model_type:", cfg["model_type"], "| epochs:", cfg["epochs"], "| early_stop:", cfg["early_stop_patience"])
+print("val_max_samples:", cfg["val_max_samples"], "| ctc/ar loss:", cfg["ctc_loss_weight"], cfg["ar_loss_weight"])
+print("decode:", cfg["decode_strategy"], "| decode ctc/ar:", cfg["decode_ctc_weight"], cfg["decode_ar_weight"])
 ```
 
 ---
@@ -297,6 +308,8 @@ p1 = cfg.get("curriculum_phase1") or {}
 cfg["train_manifest"] = str(OUTPUT / "train_short.jsonl")
 cfg["max_tgt_len"] = int(p1.get("max_tgt_len", 64))
 cfg["epochs"] = int(p1.get("epochs", 18))
+cfg["learning_rate"] = float(p1.get("learning_rate", 2e-4))  # phase 1 lr (was inheriting 5e-5)
+cfg["early_stop_patience"] = max(15, int(p1.get("early_stop_patience", 15)))
 cfg["resume_from_checkpoint"] = False
 Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
 print("Phase 1:", cfg["train_manifest"], "max_tgt_len:", cfg["max_tgt_len"], "epochs:", cfg["epochs"])
@@ -305,6 +318,54 @@ import os
 rc = os.system("python -u src/train.py --config configs/train_kaggle.yaml")
 assert rc == 0, f"Phase 1 failed exit={rc}"
 ```
+
+---
+
+## Cell 11b — (Optional) One-click autopilot training
+
+If you prefer a fully automatic run (no manual stop/edit/restart loops), run this
+cell instead of Cells 12/12b/12c/12d. It will:
+- run phase 1 -> 2a -> 2b -> 2c in sequence,
+- automatically retry phase 2a once with safer fallback settings if needed,
+- tune decode weights automatically from final eval per-mode CER,
+- optionally export/upload to Firebase only if quality gate passes,
+- write a summary report to `output/autopilot_report.json`.
+
+```python
+import os
+
+# Assumes data prep + split + curriculum files already exist from previous cells.
+cmd = (
+    "python -u src/autopilot_train.py "
+    "--config configs/train_kaggle.yaml "
+    "--report output/autopilot_report.json "
+    "--export"
+)
+rc = os.system(cmd)
+assert rc == 0, f"Autopilot failed exit={rc}"
+```
+
+After completion, open:
+- `output/autopilot_report.json`
+- `output/training_log.jsonl`
+- `output/eval_report_autopilot.json`
+
+If you want upload to Firebase at the end (only when gate passes), run:
+
+```python
+import os
+cmd = (
+    "python -u src/autopilot_train.py "
+    "--config configs/train_kaggle.yaml "
+    "--report output/autopilot_report.json "
+    "--export --upload"
+)
+rc = os.system(cmd)
+assert rc == 0, f"Autopilot+upload failed exit={rc}"
+```
+
+> For Kaggle/Colab: provide credentials via `FIREBASE_SERVICE_ACCOUNT_JSON` secret/env
+> or `--firebase-credentials /path/to/service-account.json`.
 
 ---
 
@@ -318,9 +379,9 @@ cfg = yaml.safe_load(Path("configs/train_kaggle.yaml").read_text(encoding="utf-8
 p2a = cfg.get("curriculum_phase2a") or {}
 cfg["train_manifest"] = str(OUTPUT / "train_medium.jsonl")
 cfg["max_tgt_len"] = int(p2a.get("max_tgt_len", 96))
-cfg["epochs"] = int(p2a.get("epochs", 16))
+cfg["epochs"] = max(24, int(p2a.get("epochs", 24)))
 cfg["learning_rate"] = float(p2a.get("learning_rate", 3e-5))
-cfg["early_stop_patience"] = int(p2a.get("early_stop_patience", 8))
+cfg["early_stop_patience"] = max(20, int(p2a.get("early_stop_patience", 20)))
 cfg["resume_from_checkpoint"] = True
 cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
 Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
@@ -345,7 +406,7 @@ cfg["train_manifest"] = str(OUTPUT / "train.jsonl")
 cfg["max_tgt_len"] = int(p2b.get("max_tgt_len", 128))
 cfg["epochs"] = int(p2b.get("epochs", 35))
 cfg["learning_rate"] = float(p2b.get("learning_rate", 2e-5))
-cfg["early_stop_patience"] = int(p2b.get("early_stop_patience", 12))
+cfg["early_stop_patience"] = max(15, int(p2b.get("early_stop_patience", 15)))
 cfg["resume_from_checkpoint"] = True
 cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
 Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
@@ -370,7 +431,7 @@ cfg["train_manifest"] = str(OUTPUT / "train_iam_long.jsonl")
 cfg["max_tgt_len"] = int(p2c.get("max_tgt_len", 128))
 cfg["epochs"] = int(p2c.get("epochs", 20))
 cfg["learning_rate"] = float(p2c.get("learning_rate", 1e-5))
-cfg["early_stop_patience"] = int(p2c.get("early_stop_patience", 10))
+cfg["early_stop_patience"] = max(15, int(p2c.get("early_stop_patience", 15)))
 cfg["resume_from_checkpoint"] = True
 cfg["model_path"] = str(OUTPUT / "checkpoint_best.pt")
 Path("configs/train_kaggle.yaml").write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
