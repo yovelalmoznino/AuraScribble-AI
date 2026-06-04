@@ -17,8 +17,17 @@ from pathlib import Path
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    print("$", " ".join(cmd))
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kwargs)
+    print("$", " ".join(cmd), flush=True)
+    cp = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+    if cp.stdout:
+        print(cp.stdout, end="", flush=True)
+    if cp.stderr:
+        print(cp.stderr, end="", file=sys.stderr, flush=True)
+    if cp.returncode != 0:
+        raise subprocess.CalledProcessError(
+            cp.returncode, cmd, output=cp.stdout, stderr=cp.stderr
+        )
+    return cp
 
 
 def write_metadata(slug: str, title: str, notebook_path: Path, dataset_slug: str) -> Path:
