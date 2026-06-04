@@ -1,25 +1,119 @@
-name: AuraScribble Auto-Train Pipeline
+name: AuraScribble Auto-Retrain
+
+# Runs daily at 06:00 UTC (≈ 09:00 Israel). Counts new corrections in
+# Firebase; if ≥ RETRAIN_THRESHOLD (500 by default), triggers the
+# AuraScribble Kaggle kernel which does the actual GPU training and uploads
+# the new ONNX back to Firebase. The training itself happens on Kaggle (free
+# GPU), this workflow is just orchestration.
 
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'        # daily 06:00 UTC
+  workflow_dispatch:           # also allow manual trigger from GitHub UI
+    inputs:
+      force:
+        description: 'Force retrain even if below threshold'
+        type: boolean
+        default: false
+
+env:
+  RETRAIN_THRESHOLD: '500'
+  FIREBASE_BUCKET: 'aurascribblr.firebasestorage.app'
+  KAGGLE_KERNEL_SLUG: ${{ vars.KAGGLE_KERNEL_SLUG }}
+  KAGGLE_DATASET_SLUG: ${{ vars.KAGGLE_DATASET_SLUG }}
 
 jobs:
-  train:
+  check_and_retrain:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: tools/handwriting-model
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          
-      - name: Install Dependencies
+          python-version: '3.11'
+
+      - name: Install Python deps
         run: |
-          pip install torch==2.3.1 onnx onnxscript firebase-admin pyyaml numpy tqdm
-          
-      - name: Firebase Authentication
-        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > firebase-service-account.json
-        
-      - name: Run Auto-Train Script
-        run: python src/auto_train.py
+          python -m pip install --upgrade pip
+          pip install firebase-admin kaggle
+
+      - name: Write Firebase service account
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > firebase-service-account.json
+          python -c "import json; json.load(open('firebase-service-account.json'))"
+          echo "✓ Firebase credentials valid JSON"
+
+      - name: Count new corrections
+        id: count
+        run: |
+          python scripts/count_corrections.py \
+            --credentials firebase-service-account.json \
+            --bucket "$FIREBASE_BUCKET" \
+            --threshold "$RETRAIN_THRESHOLD" | tee count.txt
+          grep '^COUNT=' count.txt >> "$GITHUB_OUTPUT"
+          grep '^SHOULD_RETRAIN=' count.txt >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to retrain
+        id: decide
+        run: |
+          force="${{ inputs.force }}"
+          should="${{ steps.count.outputs.SHOULD_RETRAIN }}"
+          if [ "$force" = "true" ] || [ "$should" = "true" ]; then
+            echo "go=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "Below threshold (${{ steps.count.outputs.COUNT }}/$RETRAIN_THRESHOLD). Skipping retrain."
+          fi
+
+      - name: Write Kaggle credentials
+        if: steps.decide.outputs.go == 'true'
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          printf '{"username":"%s","key":"%s"}' "$KAGGLE_USERNAME" "$KAGGLE_KEY" > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+          echo "✓ kaggle.json written"
+
+      - name: Trigger Kaggle retrain
+        if: steps.decide.outputs.go == 'true'
+        run: |
+          python scripts/trigger_kaggle_retrain.py \
+            --notebook kaggle/KAGGLE_TRAIN_V8.ipynb \
+            --slug "$KAGGLE_KERNEL_SLUG" \
+            --dataset "$KAGGLE_DATASET_SLUG" \
+            --timeout-min 120 \
+            --output-dir kaggle_outputs
+
+      - name: Upload run artifacts
+        if: steps.decide.outputs.go == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-run-${{ github.run_id }}
+          path: tools/handwriting-model/kaggle_outputs/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Create summary
+        if: always()
+        run: |
+          {
+            echo "## AuraScribble Auto-Retrain"
+            echo ""
+            echo "- New corrections: \`${{ steps.count.outputs.COUNT }}\` / threshold \`${{ env.RETRAIN_THRESHOLD }}\`"
+            echo "- Retrained: \`${{ steps.decide.outputs.go }}\`"
+            if [ -f kaggle_outputs/result.json ]; then
+              echo ""
+              echo "### Kaggle run result"
+              echo '```json'
+              cat kaggle_outputs/result.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
