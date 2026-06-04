@@ -26,9 +26,6 @@ jobs:
   check_and_retrain:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    defaults:
-      run:
-        working-directory: tools/handwriting-model
     steps:
       - uses: actions/checkout@v4
 
@@ -97,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kaggle-run-${{ github.run_id }}
-          path: tools/handwriting-model/kaggle_outputs/
+          path: kaggle_outputs/
           if-no-files-found: ignore
           retention-days: 30
 
