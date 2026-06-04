@@ -31,10 +31,22 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def write_metadata(slug: str, title: str, notebook_path: Path, dataset_slug: str) -> Path:
-    """Build the kernel-metadata.json that `kaggle kernels push` expects."""
+    """Build the kernel-metadata.json that `kaggle kernels push` expects.
+
+    Kaggle requires that the title resolves to the same slug as the id, otherwise
+    it warns and refuses to push. We derive a slug-safe title from the id's
+    kernel-slug component.
+    """
+    # Derive a slug-safe title from the kernel slug (e.g. "yovelalmoznino/aurascribble-train"
+    # → "aurascribble train")
+    kernel_slug = slug.split("/", 1)[-1]
+    safe_title = kernel_slug.replace("-", " ").strip()
+    if not safe_title:
+        safe_title = title
+
     meta = {
         "id": slug,
-        "title": title,
+        "title": safe_title,
         "code_file": notebook_path.name,
         "language": "python",
         "kernel_type": "notebook",

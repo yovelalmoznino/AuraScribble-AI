@@ -68,19 +68,13 @@ jobs:
             echo "Below threshold (${{ steps.count.outputs.COUNT }}/$RETRAIN_THRESHOLD). Skipping retrain."
           fi
 
-      - name: Write Kaggle credentials
-        if: steps.decide.outputs.go == 'true'
-        env:
-          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
-        run: |
-          mkdir -p ~/.kaggle
-          printf '{"username":"%s","key":"%s"}' "$KAGGLE_USERNAME" "$KAGGLE_KEY" > ~/.kaggle/kaggle.json
-          chmod 600 ~/.kaggle/kaggle.json
-          echo "✓ kaggle.json written"
-
       - name: Trigger Kaggle retrain
         if: steps.decide.outputs.go == 'true'
+        env:
+          # Kaggle CLI auto-picks these env vars (no need for ~/.kaggle/kaggle.json).
+          # Works with both old kaggle.json format and the new single-token format.
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
         run: |
           python scripts/trigger_kaggle_retrain.py \
             --notebook kaggle/KAGGLE_TRAIN_V8.ipynb \
