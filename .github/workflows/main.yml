@@ -68,11 +68,31 @@ jobs:
             echo "Below threshold (${{ steps.count.outputs.COUNT }}/$RETRAIN_THRESHOLD). Skipping retrain."
           fi
 
+      - name: Write Kaggle credentials
+        if: steps.decide.outputs.go == 'true'
+        env:
+          # Single-token format (new Kaggle CLI). The user's KAGGLE_KEY secret
+          # holds the token string copied from kaggle.com/settings/api.
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
+          # Older Kaggle CLI versions still want username+key in kaggle.json.
+          # Writing both forms covers any CLI version pip happens to install.
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p ~/.kaggle
+          # New CLI: access_token file with bare token
+          printf '%s' "$KAGGLE_API_TOKEN" > ~/.kaggle/access_token
+          chmod 600 ~/.kaggle/access_token
+          # Old CLI: kaggle.json
+          printf '{"username":"%s","key":"%s"}' "$KAGGLE_USERNAME" "$KAGGLE_KEY" > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+          echo "✓ Wrote ~/.kaggle/access_token and ~/.kaggle/kaggle.json"
+          ls -la ~/.kaggle/
+
       - name: Trigger Kaggle retrain
         if: steps.decide.outputs.go == 'true'
         env:
-          # Kaggle CLI auto-picks these env vars (no need for ~/.kaggle/kaggle.json).
-          # Works with both old kaggle.json format and the new single-token format.
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
         run: |
