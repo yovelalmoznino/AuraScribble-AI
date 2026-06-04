@@ -95,6 +95,8 @@ jobs:
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
+          # Injected into the kernel source so Kaggle doesn't need access to Kaggle Secrets
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
           python scripts/trigger_kaggle_retrain.py \
             --notebook kaggle/KAGGLE_TRAIN_V8.ipynb \

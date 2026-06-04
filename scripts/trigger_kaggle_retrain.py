@@ -8,6 +8,7 @@ then polls until status is complete.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -61,6 +62,29 @@ def write_metadata(slug: str, title: str, notebook_path: Path, dataset_slug: str
     out = notebook_path.parent / "kernel-metadata.json"
     out.write_text(json.dumps(meta, indent=2))
     return out
+
+
+def inject_firebase_secret(notebook_path: Path) -> None:
+    """Replace the __FIREBASE_SA_B64__ placeholder in the notebook with a base64
+    encoding of the Firebase service account JSON read from env. Kaggle Secrets
+    can't be attached via the API, so we inline the credential into the kernel
+    source instead. Kernel is private, only the owner can read it.
+    """
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if not sa_json:
+        print(
+            "WARNING: FIREBASE_SERVICE_ACCOUNT_JSON env var is empty — "
+            "kernel will try Kaggle Secrets fallback (which usually fails on API runs).",
+            file=sys.stderr,
+        )
+        return
+    sa_b64 = base64.b64encode(sa_json.encode("utf-8")).decode("ascii")
+    text = notebook_path.read_text(encoding="utf-8")
+    if "__FIREBASE_SA_B64__" not in text:
+        print("WARNING: placeholder __FIREBASE_SA_B64__ not found in notebook — skipping injection.", file=sys.stderr)
+        return
+    notebook_path.write_text(text.replace("__FIREBASE_SA_B64__", sa_b64), encoding="utf-8")
+    print(f"✓ Injected Firebase credentials ({len(sa_b64)} b64 chars) into notebook")
 
 
 def push_kernel(notebook_path: Path) -> None:
@@ -131,6 +155,7 @@ def main() -> None:
 
     print(f"Pushing notebook for kernel {args.slug}")
     write_metadata(args.slug, args.title, args.notebook, args.dataset)
+    inject_firebase_secret(args.notebook)
     push_kernel(args.notebook)
 
     print(f"Waiting up to {args.timeout_min} min for kernel run to finish...")
