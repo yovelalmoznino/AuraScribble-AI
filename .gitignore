@@ -1,6 +1,16 @@
 # סביבה וירטואלית
 venv/
+.venv/
 __pycache__/
+
+# Colab bundle (מיוצר מקומית להעלאה ל-Drive)
+colab_bundle/
+colab_bundle.zip
+
+# Temporary dataset downloads (huge, regenerable)
+mathwriting_download/
+mathwriting-2024.tgz
+mathwriting-2024-excerpt.tgz
 
 # דאטה (כל מה שבתוך תיקיית data)
 data/
