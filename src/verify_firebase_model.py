@@ -23,7 +23,7 @@ from decode import greedy_decode
 from metrics import cer
 from model_factory import build_model
 from tokenizer import CharTokenizer
-from upload_firebase import DEFAULT_BUCKET, _resolve_credentials
+from upload_firebase import DEFAULT_BUCKET, _project_for, _resolve_credentials
 
 try:
     from google.cloud import storage
@@ -36,17 +36,17 @@ def download_blob(bucket_name: str, remote_path: str, local_path: Path) -> None:
     if creds is None:
         raise RuntimeError(
             "Firebase credentials missing.\n"
-            "Option A — service account JSON:\n"
-            "  1. Firebase Console → Project aurascribblr → ⚙ Settings → Service accounts\n"
-            "  2. Generate new private key → save as:\n"
-            "     tools/handwriting-model/configs/firebase_service_account.json\n"
+            "Option A (recommended) — Application Default Credentials:\n"
+            "  gcloud auth application-default login\n"
             "Option B — env var for this PowerShell session:\n"
             "  $env:GOOGLE_APPLICATION_CREDENTIALS = 'C:\\path\\to\\your-key.json'\n"
-            "Option C — manual download (no key):\n"
+            "Option C — legacy service-account JSON at:\n"
+            "  tools/handwriting-model/configs/firebase_service_account.json\n"
+            "Option D — manual download (no key):\n"
             "  Download models/latest_handwriting.onnx and latest_vocab.txt from Storage,\n"
             "  then run: python src/verify_firebase_model.py --local-onnx PATH --local-vocab PATH"
         )
-    client = storage.Client(credentials=creds, project=creds.project_id)
+    client = storage.Client(credentials=creds, project=_project_for(creds))
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(remote_path)
     if not blob.exists():

@@ -9,6 +9,9 @@ from pathlib import Path
 try:
     from google.cloud import storage
     from google.oauth2 import service_account
+    import google.auth
+    from google.auth.credentials import Credentials as _GoogleCredentials
+    from google.auth.exceptions import DefaultCredentialsError
 except ImportError as exc:
     raise SystemExit(
         "Missing dependency: pip install google-cloud-storage\n"
@@ -18,6 +21,26 @@ except ImportError as exc:
 
 DEFAULT_BUCKET = "aurascribblr.firebasestorage.app"
 DEFAULT_REMOTE = "models/latest_handwriting.onnx"
+DEFAULT_PROJECT = "aurascribblr"
+
+
+def _project_for(creds: object) -> str:
+    """Return the GCP project for a Storage client.
+
+    Service-account credentials carry `project_id`; ADC credentials do not, so
+    we fall back to the project bound by `gcloud config set project ...`, then
+    to the constant matching DEFAULT_BUCKET.
+    """
+    explicit = getattr(creds, "project_id", None)
+    if explicit:
+        return explicit
+    try:
+        _, adc_project = google.auth.default()
+        if adc_project:
+            return adc_project
+    except DefaultCredentialsError:
+        pass
+    return DEFAULT_PROJECT
 
 
 def _default_vocab_path() -> Path | None:
@@ -57,8 +80,16 @@ def _validate_service_account_info(info: dict) -> None:
         )
 
 
-def _resolve_credentials(path: str | None) -> service_account.Credentials | None:
-    """Load service account from file path, env var path, or inline JSON env."""
+def _resolve_credentials(path: str | None) -> _GoogleCredentials | None:
+    """Resolve Google credentials, preferring short-lived ADC over long-lived JSON keys.
+
+    Order:
+      1. FIREBASE_SERVICE_ACCOUNT_JSON env (inline JSON) — Kaggle / CI path.
+      2. Explicit path or GOOGLE_APPLICATION_CREDENTIALS — interim local override.
+      3. configs/firebase_service_account.json next to the script — legacy local dev.
+      4. Application Default Credentials (`gcloud auth application-default login`)
+         — recommended default; no JSON key file on disk.
+    """
     inline = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
     if inline:
         info = json.loads(inline.strip())
@@ -77,7 +108,11 @@ def _resolve_credentials(path: str | None) -> service_account.Credentials | None
         _validate_service_account_info(info)
         return service_account.Credentials.from_service_account_file(str(default))
 
-    return None
+    try:
+        creds, _ = google.auth.default()
+        return creds
+    except DefaultCredentialsError:
+        return None
 
 
 def upload_file(
@@ -101,7 +136,7 @@ def upload_file(
             "  - --credentials /path/to/sa.json"
         )
 
-    client = storage.Client(credentials=creds, project=creds.project_id)
+    client = storage.Client(credentials=creds, project=_project_for(creds))
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(remote_path)
     blob.upload_from_filename(str(local_path), content_type=content_type)
