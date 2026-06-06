@@ -369,7 +369,18 @@ def train(
 
     best_val_cer = float("inf")
     if isinstance(checkpoint, dict) and "val_cer" in checkpoint:
-        best_val_cer = float(checkpoint["val_cer"])
+        # When the val set composition changes between runs (e.g. we added a lot
+        # more math samples), carrying over the old best_val_cer makes the new
+        # run unable to ever "beat" it, so no checkpoint gets written. Allow the
+        # caller to opt into resetting it.
+        if config.get("reset_best_val_cer_on_resume", False):
+            print(
+                f"Resume: ignoring previous best_val_cer={float(checkpoint['val_cer']):.4f} "
+                "(reset_best_val_cer_on_resume=true); first new epoch will set baseline.",
+                flush=True,
+            )
+        else:
+            best_val_cer = float(checkpoint["val_cer"])
 
     n_batches = len(train_loader)
     log_every = int(config.get("log_every_batches", 25))
