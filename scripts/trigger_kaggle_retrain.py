@@ -92,15 +92,63 @@ def push_kernel(notebook_path: Path) -> None:
     run(["kaggle", "kernels", "push", "-p", str(folder)])
 
 
-def wait_for_completion(slug: str, timeout_min: int = 120, poll_sec: int = 60) -> dict:
-    """Poll `kaggle kernels status` until done or timeout."""
+def _try_download_outputs(slug: str, dest: Path) -> bool:
+    """Attempt to download kernel outputs. Returns True if it produced files.
+
+    `kaggle kernels output` exits 0 (or near-0) once the kernel has finished and
+    its outputs are available — even if the kernel is still listed as 'running'
+    by a broken status endpoint. We use this as a fallback signal when
+    `kernels status` keeps returning 500s.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["kaggle", "kernels", "output", slug, "-p", str(dest)],
+            capture_output=True, text=True, check=True,
+        )
+    except subprocess.CalledProcessError:
+        return False
+    # Outputs are available only after the kernel completed. result.json is
+    # written by the very last cell, so its presence is a strong "done" signal.
+    return (dest / "result.json").exists()
+
+
+def wait_for_completion(
+    slug: str,
+    timeout_min: int = 120,
+    poll_sec: int = 60,
+    output_dir: Path = Path("kaggle_outputs"),
+    fallback_after_failures: int = 5,
+) -> dict:
+    """Poll `kaggle kernels status` until done or timeout.
+
+    If the status endpoint returns errors (Kaggle's GetKernelSessionStatus has
+    been flaky), after N consecutive failures we start probing for outputs
+    instead. The kernel often runs and uploads to Firebase successfully even
+    when the status API is broken — we don't want to declare failure in that
+    case.
+    """
     deadline = time.time() + timeout_min * 60
     last_status = None
+    consecutive_failures = 0
     while time.time() < deadline:
         try:
             cp = run(["kaggle", "kernels", "status", slug])
+            consecutive_failures = 0
         except subprocess.CalledProcessError as e:
-            print(f"status check failed (transient): {e.stderr}", file=sys.stderr)
+            consecutive_failures += 1
+            print(
+                f"status check failed (transient, {consecutive_failures} in a row): {e.stderr}",
+                file=sys.stderr,
+            )
+            if consecutive_failures >= fallback_after_failures:
+                print(
+                    f"status endpoint flaky — probing kernel outputs as fallback...",
+                    file=sys.stderr,
+                )
+                if _try_download_outputs(slug, output_dir):
+                    print("✓ kernel outputs available — treating as complete.")
+                    return {"status": "complete", "raw": "(via output fallback)"}
             time.sleep(poll_sec)
             continue
 
@@ -116,6 +164,10 @@ def wait_for_completion(slug: str, timeout_min: int = 120, poll_sec: int = 60) -
             return {"status": "error", "raw": out}
         time.sleep(poll_sec)
 
+    # Final fallback: try outputs one last time before declaring timeout.
+    if _try_download_outputs(slug, output_dir):
+        print("✓ kernel outputs available at deadline — treating as complete.")
+        return {"status": "complete", "raw": "(via output fallback at timeout)"}
     return {"status": "timeout", "raw": last_status or ""}
 
 
@@ -159,7 +211,11 @@ def main() -> None:
     push_kernel(args.notebook)
 
     print(f"Waiting up to {args.timeout_min} min for kernel run to finish...")
-    result = wait_for_completion(args.slug, timeout_min=args.timeout_min)
+    result = wait_for_completion(
+        args.slug,
+        timeout_min=args.timeout_min,
+        output_dir=args.output_dir,
+    )
     print(f"Final status: {result['status']}")
 
     if result["status"] != "complete":
